@@ -4466,6 +4466,7 @@ prop_cli_empty_cicounts_all_zero :: Bool
 prop_cli_empty_cicounts_all_zero =
   let c = emptyCICounts
    in ciFilesScanned c == 0
+        && ciFilesIgnored c == 0
         && ciTypePass c == 0
         && ciTypeFail c == 0
         && ciTypeSkip c == 0
@@ -4490,11 +4491,12 @@ prop_cli_tcresult_reflexive =
 -- | CICounts field-wise addition is correct
 prop_cli_cicounts_merge :: Bool
 prop_cli_cicounts_merge =
-  let a = CICounts 1 2 3 4 5 6 7 8 9
-      b = CICounts 9 10 11 12 13 14 15 16 17
+  let a = CICounts 1 0 2 3 4 5 6 7 8 9
+      b = CICounts 9 0 10 11 12 13 14 15 16 17
       c =
         CICounts
           (ciFilesScanned a + ciFilesScanned b)
+          (ciFilesIgnored a + ciFilesIgnored b)
           (ciTypePass a + ciTypePass b)
           (ciTypeFail a + ciTypeFail b)
           (ciTypeSkip a + ciTypeSkip b)

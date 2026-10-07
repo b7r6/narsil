@@ -19,7 +19,7 @@ import Control.Concurrent.QSemN (newQSemN, signalQSemN, waitQSemN)
 import Control.Exception (bracket_)
 import Control.Monad (foldM, unless, when)
 import Control.Monad.IO.Class (MonadIO (..))
-import Data.List (isPrefixOf)
+import Data.List (isPrefixOf, partition)
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import GHC.Conc (getNumCapabilities)
@@ -89,6 +89,7 @@ runCIPhases config dir = do
   pure $
     CICounts
       { ciFilesScanned = ciFilesScanned typeCounts
+      , ciFilesIgnored = ciFilesIgnored typeCounts
       , ciTypePass = ciTypePass typeCounts
       , ciTypeFail = ciTypeFail typeCounts
       , ciTypeSkip = ciTypeSkip typeCounts
@@ -104,7 +105,7 @@ concurrently (bounded by the capability count), tallying ok/skip/fail counts.
 -}
 runTypeCheckPhase :: Config.Config -> FilePath -> AppM CICounts
 runTypeCheckPhase config dir = do
-  files <- liftIO $ collectFiles config dir
+  (files, ignoredCount) <- liftIO $ collectFilesCounted config dir
 
   loggingEnv <- getLogEnv
   loggingCtx <- getKatipContext
@@ -127,6 +128,7 @@ runTypeCheckPhase config dir = do
   pure $
     CICounts
       { ciFilesScanned = length files
+      , ciFilesIgnored = ignoredCount
       , ciTypePass = okCount
       , ciTypeFail = failCount
       , ciTypeSkip = skipCount
@@ -279,6 +281,10 @@ reportCISummary counts = do
       summary =
         "checked "
           <> plural "file" (ciFilesScanned counts)
+          <> ( if ciFilesIgnored counts > 0
+                 then " (" <> n (ciFilesIgnored counts) <> " ignored by config)"
+                 else ""
+             )
           <> ": "
           <> n (ciTypePass counts)
           <> " ok"
@@ -297,20 +303,32 @@ reportCISummary counts = do
 ignores) or yield the single path (unless ignored).
 -}
 collectFiles :: Config.Config -> FilePath -> IO [FilePath]
-collectFiles config path = do
+collectFiles config path = fst <$> collectFilesCounted config path
+
+{- | 'collectFiles' plus the number of .nix files that configured ignores
+excluded — the summary prints it so a small scan count is explicable.
+-}
+collectFilesCounted :: Config.Config -> FilePath -> IO ([FilePath], Int)
+collectFilesCounted config path = do
   isDirectory <- doesDirectoryExist path
   if isDirectory
     then collectNixFilesRecursive config path
-    else pure [path | not (Profiles.isIgnored config path)]
+    else
+      pure $
+        if Profiles.isIgnored config path
+          then ([], 1)
+          else ([path], 0)
 
-collectNixFilesRecursive :: Config.Config -> FilePath -> IO [FilePath]
+collectNixFilesRecursive :: Config.Config -> FilePath -> IO ([FilePath], Int)
 collectNixFilesRecursive config root = do
   canonicalRoot <- canonicalizePath root
   let ignoredDirs =
         Set.fromList
           [".git", ".direnv", "node_modules", ".cache", ".lake", "result", "result-lib", "target"]
   allFiles <- walkDirectory canonicalRoot ignoredDirs [] Set.empty [root]
-  pure $ filter (not . Profiles.isIgnored config . makeRelative canonicalRoot) allFiles
+  let (kept, ignored) =
+        partition (not . Profiles.isIgnored config . makeRelative canonicalRoot) allFiles
+  pure (kept, length ignored)
 
 walkDirectory ::
   FilePath -> Set.Set FilePath -> [FilePath] -> Set.Set FilePath -> [FilePath] -> IO [FilePath]

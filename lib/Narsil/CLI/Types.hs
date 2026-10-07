@@ -28,6 +28,10 @@ pass/fail/skip and violation counts — summed into the final summary.
 -}
 data CICounts = CICounts
   { ciFilesScanned :: !Int
+  , ciFilesIgnored :: !Int
+  {- ^ .nix files present on disk but excluded by configured ignores —
+  surfaced in the summary so an unexpectedly small scan is explicable.
+  -}
   , ciTypePass :: !Int
   , ciTypeFail :: !Int
   , ciTypeSkip :: !Int
@@ -40,7 +44,7 @@ data CICounts = CICounts
 
 -- | A 'CICounts' with every field zeroed — the starting accumulator.
 emptyCICounts :: CICounts
-emptyCICounts = CICounts 0 0 0 0 0 0 0 0 0
+emptyCICounts = CICounts 0 0 0 0 0 0 0 0 0 0
 
 -- ── status markers ──────────────────────────────────────────────────
 
