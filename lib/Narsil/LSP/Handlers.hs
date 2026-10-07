@@ -183,6 +183,30 @@ composes in place of the repl pool — the cache and shape floor stay.
 nixpkgsBackend :: EvalBackend
 nixpkgsBackend = cachingBackend nixpkgsEvalCache (composeBackend replBackend shapeBackend)
 
+{- | The HOVER-path backend: read the eval cache (filled in the background by
+the warm pool) and, on a miss, fall straight to the fast shape template —
+NEVER the slow @nix repl@. This is what keeps hover snappy on a Haskell-heavy
+file: @pkgs.cabal-install@/@ghc@/@hlint@ each force all of @haskellPackages@
+to eval, so blocking a hover on that (the full 'nixpkgsBackend', up to the
+4s budget) is the sluggishness. 'failBackend' under 'cachingBackend' reads
+but never STORES a miss, so it can't poison the cache the warm pool is
+filling with the real evals — a later hover then serves those from cache.
+-}
+hoverBackend :: EvalBackend
+hoverBackend = composeBackend (cachingBackend nixpkgsEvalCache failBackend) shapeBackend
+
+{- | A backend that declines every path — the miss signal that turns
+'cachingBackend' into a read-only cache (hit → cached, miss → 'Unsupported',
+no store, no eval). Composed under a fast tier so the miss falls through.
+-}
+failBackend :: EvalBackend
+failBackend =
+  EvalBackend
+    { backendName = "cache-only"
+    , evalSpine = \_ _ -> pure (Left Unsupported)
+    , evalFieldType = \_ _ _ -> pure (Left Unsupported)
+    }
+
 {-# NOINLINE nixpkgsEvalCache #-}
 
 {- | The process-wide eval cache, loaded once from NVMe (or empty on first run)
@@ -275,9 +299,13 @@ enrichPkgsOracle uri expr env = do
   maybe (pure env) build mIdx
  where
   build idx = do
-    mOracle <- timeout oracleBudgetMicros (buildPkgsOracle nixpkgsBackend idx expr)
+    -- hoverBackend, not nixpkgsBackend: hover reads the cache + shape template
+    -- only, never the slow repl, so it cannot block on a cold Haskell-wrapper
+    -- eval. The budget is now a backstop for a pathological file, not the
+    -- common-case latency (which is sub-millisecond cache/shape work).
+    mOracle <- timeout oracleBudgetMicros (buildPkgsOracle hoverBackend idx expr)
     pure (maybe env (`withPkgsOracle` env) mOracle)
-  oracleBudgetMicros = 4_000_000
+  oracleBudgetMicros = 1_000_000
 
 {- | The inference env for a one-shot @infer@ of a file: the given base env plus a
 SYNCHRONOUSLY-built pkgs oracle (resolve the nixpkgs root, build its index, eval the
