@@ -68,7 +68,14 @@ import Narsil.Nixpkgs.Index qualified as Nixpkgs
 import Narsil.Nixpkgs.OptionsIndex qualified as Opts
 import Narsil.Nixpkgs.StorePath (fixedOutputSourcePath)
 import Narsil.Syntax.Annotation (varNameText, pattern LayerAnn)
-import Nix.Expr.Types (Binding (..), NExprF (..), NKeyName (..), NPos (..), NSourcePos (..))
+import Nix.Expr.Types (
+  Binding (..),
+  NBinaryOp (..),
+  NExprF (..),
+  NKeyName (..),
+  NPos (..),
+  NSourcePos (..),
+ )
 import Nix.Expr.Types.Annotated (NExprLoc)
 import System.Directory (canonicalizePath, doesDirectoryExist, doesFileExist, listDirectory)
 import System.Environment (lookupEnv)
@@ -153,10 +160,17 @@ lookupLibIndex uri =
       (\idx -> pure (m, idx))
       (Map.lookup root m)
 
-{- | Every statically-named binding in every @lib/*.nix@ (any depth — the lib
-files are one big attrset each, sometimes nested). First definition wins on
-name collisions across files (alphabetical file order; collisions are rare
-and any landing beats none).
+{- | The TOP-LEVEL exports of every @lib/*.nix@: the names reachable as
+@lib.\<name\>@. Each lib file is @{ lib }: let \<helpers\> in \<exportSet\>@
+(sometimes without the @let@, sometimes nested) — so the exports are the
+DIRECT bindings of the result attrset, reached by peeling the lambda/@let@
+wrappers. We index ONLY that top layer: recursing into binding values (the
+previous behavior) indexed function-local bindings — a local @let types =
+…@ inside some helper — as if they were @lib.types@, mis-targeting
+go-to-definition to the wrong file. A nested path like @lib.types.str@ now
+cleanly MISSES rather than resolving to a polluted local; wrong-target is
+worse than an honest miss. First definition wins on cross-file name
+collisions (alphabetical file order; collisions are rare).
 -}
 buildLibIndex :: FilePath -> IO (Map.Map Text (FilePath, CSpan.Span))
 buildLibIndex dir = do
@@ -170,28 +184,42 @@ buildLibIndex dir = do
  where
   fileBindings f =
     either (const Map.empty) (bindingMap f) <$> Safety.safeParseNixFile f
-  bindingMap f expr = Map.fromList [(n, (f, sp)) | (n, sp) <- walk expr]
-  walk node@(LayerAnn _ e) = named e ++ concatMap walk (children node)
-  named (NSet _ bs) = concatMap bound bs
-  named (NLet bs _) = concatMap bound bs
-  named _ = []
-  bound (NamedVar (StaticKey k :| []) _ (NSourcePos _ (NPos l) (NPos c))) =
-    [(varNameText k, CSpan.Span loc loc Nothing)]
-   where
-    loc = CSpan.Loc (unPos l) (unPos c)
-  bound _ = []
-  children (LayerAnn _ e) = childrenOf e
-  childrenOf (NSet _ bs) = concatMap bindingChild bs
-  childrenOf (NLet bs b) = concatMap bindingChild bs ++ [b]
-  childrenOf (NAbs _ b) = [b]
-  childrenOf (NIf c1 t1 f1) = [c1, t1, f1]
-  childrenOf (NWith a b) = [a, b]
-  childrenOf (NAssert a b) = [a, b]
-  childrenOf (NApp a b) = [a, b]
-  childrenOf (NBinary _ a b) = [a, b]
-  childrenOf _ = []
-  bindingChild (NamedVar _ v _) = [v]
-  bindingChild (Inherit ms _ _) = maybe [] pure ms
+  bindingMap f expr =
+    let (letDefs, result) = peelWrappers Map.empty expr
+     in Map.fromList [(n, (f, sp)) | (n, sp) <- exportsOf letDefs result]
+  -- Peel the `{ lib }:` lambda(s) and `let <helpers> in` wrapper(s) to reach
+  -- the export set, ACCUMULATING each let binding's definition span — so an
+  -- `inherit`-exported helper (the dominant pattern: `let … in { inherit
+  -- mkIf mkMerge …; }`) resolves to where it is actually defined. Never
+  -- descends into a binding's VALUE, which is what used to index
+  -- function-local `let` names as bogus `lib.<name>` exports.
+  peelWrappers defs (LayerAnn _ (NAbs _ body)) = peelWrappers defs body
+  peelWrappers defs (LayerAnn _ (NLet bs body)) = peelWrappers (foldr addDef defs bs) body
+  peelWrappers defs node = (defs, node)
+  addDef (NamedVar (StaticKey k :| []) _ pos) m = Map.insert (varNameText k) (locOf pos) m
+  addDef _ m = m
+  -- The export set's names: an explicit `name = …` at its own site, plus
+  -- `inherit name …` (from the enclosing scope) resolved to the name's `let`
+  -- definition. External `inherit (src) …` and nested sets are not followed —
+  -- the externally-inherited names live in, and are indexed from, their own
+  -- source file.
+  exportsOf defs (LayerAnn _ (NSet _ bs)) = concatMap (export defs) bs
+  -- the export expression is often `private // { inherit mkIf mkMerge … }`
+  -- (modules.nix) — an update merge, not a bare set. Union both sides: the
+  -- explicit `{ inherit … }` resolves its locally-inherited names; a bare
+  -- `private` reference (an NSym we can't open) contributes nothing, which
+  -- is fine — those names are the file's internal, non-public half.
+  exportsOf defs (LayerAnn _ (NBinary NUpdate a b)) = exportsOf defs a ++ exportsOf defs b
+  exportsOf _ _ = []
+  export _ (NamedVar (StaticKey k :| []) _ pos) =
+    let loc = locOf pos in [(varNameText k, CSpan.Span loc loc Nothing)]
+  export defs (Inherit Nothing keys _) =
+    [ (varNameText key, CSpan.Span loc loc Nothing)
+    | key <- keys
+    , Just loc <- [Map.lookup (varNameText key) defs]
+    ]
+  export _ _ = []
+  locOf (NSourcePos _ (NPos l) (NPos c)) = CSpan.Loc (unPos l) (unPos c)
 
 {-# NOINLINE optionsIndexInflight #-}
 optionsIndexInflight :: MVar (Set.Set FilePath)
