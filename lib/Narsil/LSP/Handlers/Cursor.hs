@@ -40,7 +40,7 @@ import Narsil.Inference.Nix (TypeEnv, builtinEnv, inferExprWithEnv)
 import Narsil.Inference.Nix qualified as Infer
 import Narsil.Inference.Nix.Type qualified as NT
 import Narsil.Syntax.Annotation (srcSpanToSpan, varNameText, pattern Layer, pattern LayerAnn)
-import Nix.Expr.Types (Binding (..), NExprF (..), NKeyName (..), Params (..))
+import Nix.Expr.Types (Binding (..), NExprF (..), NKeyName (..), Params (..), Recursivity (..))
 import Nix.Expr.Types.Annotated (NExprLoc)
 import Nix.Expr.Types.Annotated qualified as Nix
 
@@ -154,16 +154,55 @@ inferExprAtWithEnv env expr l c = do
     viaValue =
       maybe (inferTarget' target) inferTarget' (bindingValueAt (l + 1) (c + 1) expr)
   inferTarget' te =
-    either fromError (\(t, _) -> Just (NT.prettyType t)) (inferExprWithEnv env te)
-  -- The sub-expression is inferred IN ISOLATION, so variables bound by an
-  -- enclosing lambda/let are simply absent here — an unbound-variable
-  -- failure says nothing about the expression's health (hovering
-  -- `inputs.treefmt-nix.flakeModule` inside the outputs lambda rendered
-  -- TYPE_ERROR on a clean file). Unbound → no hover; only a real type
-  -- clash in the target itself concedes TYPE_ERROR.
+    either fromError (\(t, _) -> Just (NT.prettyType t)) (inferExprWithEnv envLocal te)
+  -- The sub-expression is inferred IN ISOLATION, so an unextended env would
+  -- miss everything the enclosing file binds, and most identifiers deep in a
+  -- lambda would hover as nothing at all (391-probe drive on a flake-parts
+  -- module: 81 silent nulls, all lambda params and their select chains).
+  -- Extend with the whole-file pass's TYPED bindings first (real types win),
+  -- then every remaining lexically-enclosing binder as Any — a module param
+  -- hovers as dynamic, exactly what the engine believes about it.
+  envLocal =
+    let typed =
+          [ (n, t)
+          | Infer.Binding n t _ <- either (const (Infer.inferExprBindingsPartial env expr)) snd r
+          ]
+        r = inferExprWithEnv env expr
+        withTyped = foldr (\(n, t) e -> Infer.extendEnv n (NT.Forall [] t) e) env typed
+        bindAny n e = maybe (Infer.extendEnv n (NT.Forall [] NT.TAny) e) (const e) (Infer.lookupEnv n e)
+     in foldr bindAny withTyped (lexicalBindersAt l c expr)
+  -- An unbound variable can still happen (dynamic scopes, `with`); it says
+  -- nothing about the expression's health. Unbound → no hover; only a real
+  -- type clash in the target itself concedes TYPE_ERROR.
   fromError err
     | "unbound variable" `T.isInfixOf` err = Nothing
     | otherwise = Just "TYPE_ERROR"
+
+{- | Binder NAMES lexically in scope at the 0-based cursor: lambda params
+(simple, set-pattern, and @-names), let and recursive-attrset binding names,
+collected from every node whose span contains the cursor.
+-}
+lexicalBindersAt :: Int -> Int -> NExprLoc -> [Text]
+lexicalBindersAt l c = go
+ where
+  targetLine = l + 1
+  targetCol = c + 1
+  spContains (Span (Loc sl sc) (Loc el ec) _) =
+    (sl < targetLine || (sl == targetLine && sc <= targetCol))
+      && (el > targetLine || (el == targetLine && ec >= targetCol))
+  go node@(LayerAnn sp e)
+    | not (spContains (srcSpanToSpan sp)) = []
+    | otherwise = binders e ++ concatMap go (childExprs (unwrapLayer node))
+  unwrapLayer (LayerAnn _ e) = e
+  binders (NAbs (Param n) _) = [varNameText n]
+  binders (NAbs (ParamSet mName _ ps) _) =
+    maybe [] (pure . varNameText) mName ++ map (varNameText . fst) ps
+  binders (NLet bs _) = concatMap boundNames bs
+  binders (NSet Recursive bs) = concatMap boundNames bs
+  binders _ = []
+  boundNames (NamedVar (StaticKey k :| _) _ _) = [varNameText k]
+  boundNames (Inherit _ keys _) = map varNameText keys
+  boundNames _ = []
 
 {- | The VALUE expression of the let\/attrset binding whose NAME token
 contains the 1-based cursor — the thing to infer when the cursor sits on a
