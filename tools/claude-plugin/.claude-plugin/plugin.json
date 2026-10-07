@@ -1,0 +1,19 @@
+{
+  "name": "narsil-lsp",
+  "description": "narsil as the Nix language server: type diagnostics, hover, definition/references, completion over nixpkgs",
+  "version": "0.1.0",
+  "lspServers": {
+    "narsil": {
+      "command": "narsil",
+      "args": [
+        "lsp"
+      ],
+      "extensionToLanguage": {
+        ".nix": "nix"
+      }
+    }
+  },
+  "author": {
+    "name": "b7r6"
+  }
+}

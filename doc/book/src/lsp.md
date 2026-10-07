@@ -26,6 +26,47 @@ rule in the editor exactly as it does in CI. Files matched by ignore globs
 
 ## Editor setup
 
+Every client speaks to the same server: `narsil lsp` over stdio, attached
+to the `nix` filetype, rooted at the nearest `.narsil.dhall` / `flake.nix` /
+`.git`. Make sure `narsil` is on the editor's PATH (e.g. launch the editor
+from `nix develop`, or install the flake package).
+
+### Emacs (eglot, built-in since 29)
+
+```elisp
+(with-eval-after-load 'eglot
+  (add-to-list 'eglot-server-programs
+               '((nix-mode nix-ts-mode) . ("narsil" "lsp"))))
+(add-hook 'nix-mode-hook #'eglot-ensure)
+(add-hook 'nix-ts-mode-hook #'eglot-ensure)
+```
+
+### Emacs (lsp-mode)
+
+```elisp
+(with-eval-after-load 'lsp-mode
+  (add-to-list 'lsp-language-id-configuration '(nix-mode . "nix"))
+  (add-to-list 'lsp-language-id-configuration '(nix-ts-mode . "nix"))
+  (lsp-register-client
+   (make-lsp-client
+    :new-connection (lsp-stdio-connection '("narsil" "lsp"))
+    :activation-fn (lsp-activate-on "nix")
+    :priority 1
+    :server-id 'narsil)))
+(add-hook 'nix-mode-hook #'lsp-deferred)
+```
+
+### Neovim 0.11+ (native, no plugin)
+
+```lua
+vim.lsp.config('narsil', {
+  cmd = { 'narsil', 'lsp' },
+  filetypes = { 'nix' },
+  root_markers = { '.narsil.dhall', 'flake.nix', '.git' },
+})
+vim.lsp.enable('narsil')
+```
+
 ### Neovim (nvim-lspconfig)
 
 ```lua
@@ -59,12 +100,40 @@ name = "nix"
 language-servers = ["narsil"]
 ```
 
-### VS Code / other clients
+### VS Code
 
-Any generic LSP client works: launch `narsil lsp` over stdio for the `nix`
-language. A dedicated VS Code extension is planned; until then, extensions
-that let you register an arbitrary language server (e.g. *Generic LSP
-Client*) do the job.
+A dedicated extension is planned; until then any extension that registers
+an arbitrary language server works. With
+[Custom LSP Client-style extensions (e.g. "Generic LSP Client" / glspc)]:
+
+```jsonc
+// settings.json
+"glspc.languageId": "nix",
+"glspc.serverCommand": "narsil",
+"glspc.serverCommandArguments": ["lsp"]
+```
+
+Alternatively, Nix IDE users can keep Nix IDE for syntax and add narsil as
+the server through any generic-client extension — the two don't conflict
+(narsil publishes diagnostics; Nix IDE's formatting can stay).
+
+### Claude Code
+
+The repo ships a plugin that registers narsil as Claude Code's language
+server for `.nix` files — the agent's LSP tool then gets the same
+hover/definition/references/diagnostics the editor gets:
+
+```bash
+claude plugin install ./tools/claude-plugin
+```
+
+(`narsil` must be on PATH when Claude Code starts; run it from the
+devshell or install the flake package.)
+
+### Other clients
+
+Any LSP client works: launch `narsil lsp` over stdio for the `nix`
+language.
 
 ## Performance notes
 
