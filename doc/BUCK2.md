@@ -77,3 +77,26 @@ as-is; remote *execution* additionally needs workers that provide the same
 
 `cabal build` (inside the devshell) and `nix build` are unaffected by any of
 this and remain the canonical builds.
+
+## NativeLink status & limits
+
+Wiring: the RE client lives in `.buckconfig` (`[buck2_re_client]`, unified
+`address` key — this buck2 builds its capabilities client from it; the
+per-command mode file cannot configure the daemon-level client).
+`@mode/nativelink` flips `narsil.remote_cache`, which the project execution
+platform (`buck/platforms` — the prelude default, copied as instructed)
+turns into `remote_cache_enabled` + `allow_cache_uploads`. Execution stays
+local.
+
+Two known limits, both upstream-shaped:
+
+1. **Uploads are gated per-action**, and the prelude's Haskell rules never
+   pass `allow_cache_upload` on their actions (the cxx rules do). Until
+   that lands upstream (or the prelude is vendored and patched), the
+   remote action cache is read-only from this repo's perspective — and
+   therefore empty. The right fix is a small PR to facebook/buck2-prelude.
+2. **Action digests don't pin GHC**: commands invoke bare `ghc` from PATH,
+   so a toolchain bump would NOT change cache keys. Before uploads are
+   enabled for real, the toolchain should name the nix-store ghc path
+   (e.g. via a devshell-generated `.buckconfig.local`) so cache keys are
+   honest. This is the Tweag/Mercury nix-toolchain territory.

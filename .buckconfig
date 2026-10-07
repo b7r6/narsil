@@ -17,13 +17,16 @@
 [external_cells]
   prelude = bundled
 
+# root//buck/platforms:default is the prelude's default platform, copied (as
+# its comment instructs) so the executor can participate in the NativeLink
+# action cache when @mode/nativelink flips narsil.remote_cache.
 [parser]
-  target_platform_detector_spec = target:root//...->prelude//platforms:default \
-    target:prelude//...->prelude//platforms:default \
-    target:toolchains//...->prelude//platforms:default
+  target_platform_detector_spec = target:root//...->root//buck/platforms:default \
+    target:prelude//...->root//buck/platforms:default \
+    target:toolchains//...->root//buck/platforms:default
 
 [build]
-  execution_platforms = prelude//platforms:default
+  execution_platforms = root//buck/platforms:default
 
 # narsil notes
 # ------------
@@ -35,3 +38,16 @@
 #
 # NativeLink remote cache/execution: `buck2 build @mode/nativelink //...`
 # after pointing mode/nativelink at your deployment.
+
+# NativeLink RE client (straylight: local frontend on :50051, CAS/AC shards
+# behind it). Daemon-level: buck2 builds its RE client from HERE, not from
+# per-command --config. Harmless when idle — actions only read/write the
+# remote cache when the execution platform enables it, i.e. under
+# @mode/nativelink (narsil.remote_cache=1).
+[buck2_re_client]
+  address = grpc://127.0.0.1:50051
+  engine_address = grpc://127.0.0.1:50051
+  action_cache_address = grpc://127.0.0.1:50051
+  cas_address = grpc://127.0.0.1:50051
+  instance_name = main
+  tls = false
