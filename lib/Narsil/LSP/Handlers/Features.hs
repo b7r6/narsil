@@ -611,9 +611,13 @@ inlayHintsForExpr env expr range = withBindings (Infer.inferExprBindingsPartial 
  where
   withBindings bindings =
     [ InlayHint
+        -- Anchor at name-start + name-LENGTH, not spanEnd: binding spans are
+        -- often point spans (end == start), and spanEnd+1 planted every hint
+        -- two columns INSIDE the name — VSCode renders the bad position
+        -- faithfully (`En(: [String])v`), emacs papered over it.
         ( Position
             (fromIntegral (locLine (spanStart sp) - 1))
-            (fromIntegral (locCol (spanEnd sp) + 1))
+            (fromIntegral (locCol (spanStart sp) - 1 + T.length name))
         )
         (InL (": " <> NT.prettyType bindType))
         (Just InlayHintKind_Type)
