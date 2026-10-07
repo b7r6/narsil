@@ -32,10 +32,11 @@ where
 import Control.Monad (forM_)
 import Control.Monad.State.Strict
 import Data.Coerce (coerce)
+import Data.Foldable (toList)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (mapMaybe)
+import Data.Maybe (mapMaybe, maybeToList)
 import Data.Text (Text)
 import Narsil.Layout.Scope.Types
 import Narsil.Syntax.Annotation (pattern Layer, pattern LayerAnn)
@@ -285,6 +286,20 @@ addAttrRef srcSpan scope keyName =
       , refKind = AttrRef
       }
 
+{- | One key of a select path: a static key is an attribute reference; a dynamic
+@${e}@ key is real code whose inner expression is walked (so @pkgs.${k}@ gives
+@k@ a ref node and go-to-def on it resolves, instead of a dead @\<dynamic\>@).
+-}
+buildKeyRef :: SrcSpan -> ScopeId -> NKeyName NExprLoc -> Build ()
+buildKeyRef srcSpan scope key@(StaticKey _) = addAttrRef srcSpan scope key
+buildKeyRef _ _ (DynamicKey aq) = mapM_ buildExpr (dynKeyExprs aq)
+
+-- | The expression(s) inside a dynamic attr key's antiquotation.
+dynKeyExprs :: Antiquoted (NString NExprLoc) NExprLoc -> [NExprLoc]
+dynKeyExprs (Plain str) = exprsFromString str
+dynKeyExprs (Antiquoted e) = [e]
+dynKeyExprs EscapedNewline = []
+
 {- | build scope sub-graph for `with expr; body`
 creates two scopes: one for the with-expression, one for the body
 body scope has a With-edge to the expr scope
@@ -342,12 +357,15 @@ buildExpr (Layer (NAbs params body)) =
 buildExpr (LayerAnn srcSpan (NWith withExpr body)) = buildWithExpr srcSpan withExpr body
 -- symbol reference
 buildExpr (LayerAnn srcSpan (NSym name)) = buildSymbolRef srcSpan name
--- attribute select: base + attr references
-buildExpr (LayerAnn srcSpan (NSelect _ base (attr :| rest))) = do
+-- attribute select: base, each path key (static → attr ref; dynamic ${e} →
+-- walk e, else `pkgs.${k}` leaves `k` with no ref node), and the `or`-default,
+-- which evaluates in the CURRENT scope — so a reference inside it resolves to a
+-- local binder, not to the select's main branch.
+buildExpr (LayerAnn srcSpan (NSelect mDef base path)) = do
   buildExpr base
   scope <- currentScope
-  addAttrRef srcSpan scope attr
-  mapM_ (addAttrRef srcSpan scope) rest
+  mapM_ (buildKeyRef srcSpan scope) (toList path)
+  mapM_ buildExpr (maybeToList mDef)
 -- application / binary / unary / conditional / assert: recurse into subexprs
 buildExpr (Layer (NApp func arg)) = buildExpr func >> buildExpr arg
 buildExpr (Layer (NBinary _ left right)) = buildExpr left >> buildExpr right
