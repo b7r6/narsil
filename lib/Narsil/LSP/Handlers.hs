@@ -365,6 +365,16 @@ initializedHandler _not = do
   -- cache / warm pool are first forced. Absent or unparsable config → defaults.
   mroot <- getRootPath
   liftIO (installLspConfig mroot)
+  -- Force the unsafePerformIO CAFs HERE, in plain IO, immediately after the
+  -- config lands. Left lazy, their first force can happen inside somebody
+  -- else's STM transaction (lookupOrRun's atomically forcing
+  -- nixpkgsEvalCache, whose loader runs its own atomically) — GHC kills the
+  -- process with "Control.Concurrent.STM.atomically was nested" and the
+  -- client silently restarts the server in a crash loop.
+  liftIO $ do
+    _ <- Exc.evaluate nixpkgsEvalCache
+    _ <- Exc.evaluate warmPool
+    pure ()
   -- Eagerly construct the project cache so its workers are running and
   -- ready to drain enqueued files as soon as the first didOpen lands.
   -- Cheap: just spawns N idle threads.

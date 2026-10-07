@@ -212,7 +212,11 @@ address it) bypasses the cache and delegates straight through — never wrong, j
 not cached.
 -}
 cachingBackend :: EvalCache -> EvalBackend -> EvalBackend
-cachingBackend cache inner =
+-- Strict in the cache: callers hand us unsafePerformIO CAFs, and a lazy
+-- cache's FIRST force can land inside lookupOrRun's own `atomically` — the
+-- CAF loader runs STM too, and nested atomically kills the process. Forcing
+-- at construction keeps the load in plain IO.
+cachingBackend !cache inner =
   EvalBackend
     { backendName = "cache(" <> backendName inner <> ")"
     , evalSpine = \idx path ->
