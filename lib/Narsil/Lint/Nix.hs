@@ -97,13 +97,16 @@ findNixViolations = traverseNixExpr
 -- any cascading sub-expression issues.
 
 traverseNixExpr :: NExprLoc -> [NixViolation]
--- the two banned binders carry a local violation, then recurse
+-- the two banned binders carry a local violation, then recurse. Their spans
+-- are narrowed to the construct HEAD (`with <scope>;`, the `rec` keyword) —
+-- the node's own span covers the entire body, and a body-wide diagnostic
+-- means every editor hover inside a top-level `with` pops the violation.
 traverseNixExpr (LayerAnn srcSpan (NWith scope body)) =
-  nixViolation VWith srcSpan ("with " <> prettyExpr scope <> ";")
+  violationAtHead VWith srcSpan scope ("with " <> prettyExpr scope <> ";")
     : traverseNixExpr scope
     ++ traverseNixExpr body
 traverseNixExpr (LayerAnn srcSpan (NSet Recursive bindings)) =
-  nixViolation VRec srcSpan "rec { ... }"
+  (nixViolation VRec srcSpan "rec { ... }"){nvSpan = keywordSpan 3 srcSpan}
     : concatMap traverseNixBinding bindings
 -- application: check for a banned call at the head, then recurse both sides
 traverseNixExpr (LayerAnn srcSpan (NApp function argument)) =
@@ -257,6 +260,24 @@ nixViolation typ srcSpan ctx =
     , nvSpan = srcSpanToSpan srcSpan
     , nvContext = ctx
     }
+
+{- | A violation whose span runs from the construct's start to the end of its
+HEAD sub-expression (e.g. @with <scope>@) — never the whole body.
+-}
+violationAtHead :: ViolationType -> SrcSpan -> NExprLoc -> Text -> NixViolation
+violationAtHead typ srcSpan (LayerAnn headSpan _) ctx =
+  (nixViolation typ srcSpan ctx){nvSpan = narrowed}
+ where
+  narrowed =
+    let Span start _ file = srcSpanToSpan srcSpan
+        Span _ headEnd _ = srcSpanToSpan headSpan
+     in Span start headEnd file
+
+-- | The first @n@ columns of a construct's span — the keyword itself.
+keywordSpan :: Int -> SrcSpan -> Span
+keywordSpan n srcSpan =
+  let Span start@(Loc l c) _ file = srcSpanToSpan srcSpan
+   in Span start (Loc l (c + n)) file
 
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 --                                                                              // output formatting

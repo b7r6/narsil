@@ -58,7 +58,7 @@ import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
 import Data.List (inits, nub)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, listToMaybe)
+import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Language.LSP.Protocol.Message
@@ -675,9 +675,17 @@ definitionHandler req responder = do
   let DefinitionParams textDoc pos _workDone _partialResult = params
   let TextDocumentIdentifier uri = textDoc
   mvf <- getVirtualFile (toNormalizedUri uri)
-  maybe nullResp (withExpr uri pos) (mvf >>= lspSafeParse . virtualFileText)
+  maybe
+    (nullWith "the buffer does not currently parse")
+    (withExpr uri pos)
+    (mvf >>= lspSafeParse . virtualFileText)
  where
-  nullResp = responder $ Right $ InR $ InR Null
+  -- Every dead end SAYS WHY (minibuffer/notification): a silent null on an
+  -- explicit gesture reads as "broken", not "nothing there".
+  nullWith why = do
+    sendNotification SMethod_WindowShowMessage $
+      ShowMessageParams MessageType_Info ("narsil: no definition — " <> why)
+    responder $ Right $ InR $ InR Null
   -- External-first: if the cursor is on a `pkgs.<name>` select and the nixpkgs
   -- index resolves it, jump straight into nixpkgs. Otherwise fall through to the
   -- normal cross-module scope resolution. Purely additive; never blocks (the
@@ -727,15 +735,45 @@ definitionHandler req responder = do
     if base == "pkgs" then Nixpkgs.lookupPackage idx key else Nothing
   scopePath uri l c expr = do
     sg <- liftIO $ buildCrossScopeGraphWith uri (Just expr)
-    let cursorLine = fromIntegral l + 1; cursorCol = fromIntegral c + 1
-    maybe nullResp (resolveRef uri sg) (findRef (cursorLine, cursorCol) sg)
+    mIdx <- liftIO $ lookupNixpkgsIndex uri
+    let cursorLine = fromIntegral l + 1
+        cursorCol = fromIntegral c + 1
+        -- a pkgs.<name> select that got this far missed the index — say
+        -- whether that is "still warming" or "genuinely absent"
+        pkgsWhy = do
+          (base, key) <- selectAtCursor (fromIntegral l) (fromIntegral c) expr
+          if base /= "pkgs"
+            then Nothing
+            else
+              Just $
+                maybe
+                  "the nixpkgs index is still building; try again in a moment"
+                  ( const
+                      ("`pkgs." <> key <> "` is not in the nixpkgs index (overlay-provided attributes are not indexed yet)")
+                  )
+                  mIdx
+        fallbackWhy =
+          fromMaybe
+            "no binder found at the cursor (dynamic scope, `with`, or a name narsil does not index)"
+            pkgsWhy
+    maybe (nullWith fallbackWhy) (resolveRef uri sg) (findRef (cursorLine, cursorCol) sg)
   emitNixpkgsLoc uri sp =
     let declUri = maybe uri filePathToUri (CSpan.spanFile sp)
         zeroBased n = fromIntegral (max 0 (n - 1))
         toPos (CSpan.Loc ln col) = Position (zeroBased ln) (zeroBased col)
         loc = Location declUri (Range (toPos (CSpan.spanStart sp)) (toPos (CSpan.spanEnd sp)))
      in responder $ Right $ InL (Definition (InL loc))
-  resolveRef uri sg ref = either (const nullResp) (emitDecl uri) (Scope.resolve sg ref)
+  resolveRef uri sg ref =
+    either (nullWith . resolveWhy) (emitDecl uri) (Scope.resolve sg ref)
+  -- the human rendering of a resolution failure — no Show noise
+  resolveWhy (Scope.Unresolved r) =
+    "`" <> Scope.refName r <> "` has no static binder here (a `with` scope or dynamic attribute?)"
+  resolveWhy (Scope.Ambiguous r ds) =
+    "`"
+      <> Scope.refName r
+      <> "` is ambiguous here ("
+      <> T.pack (show (length ds))
+      <> " candidate declarations)"
   emitDecl uri decl =
     let declUri = spanFileUri uri (Scope.spanFile (Scope.declSpan decl))
         loc =
@@ -1048,6 +1086,14 @@ completionHandler req responder = do
     let li = fromIntegral l
         ci = fromIntegral c
     nixItems <- liftIO $ maybe (pure []) (nixpkgsItems txt li ci) idx
+    -- The seems-broken warm-up window, named: a pkgs. context with no index
+    -- yet gets a quiet log line (completion fires constantly — a popup here
+    -- would be noise; the log channel is inspectable when it matters).
+    when (null nixItems && isJust (nixpkgsCompletionContext txt li ci) && isNothing idx) $
+      sendNotification SMethod_WindowLogMessage $
+        LogMessageParams
+          MessageType_Info
+          "narsil: nixpkgs index still building — pkgs completion unavailable until it lands"
     mExpr <- liftIO (noteGoodParse uri txt)
     let path = fromMaybe "<buffer>" (uriToFilePath uri)
         env' = maybe env (moduleModeEnv env path) mExpr
