@@ -29,7 +29,9 @@
 
 module LSPFeatureSpec (lspFeatureTests) where
 
+import Control.Concurrent (threadDelay)
 import Data.Either (isLeft)
+import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust, listToMaybe)
 import Data.Text (Text)
@@ -529,4 +531,20 @@ lspFeatureTests =
   , ("lsp_nav_findreferences_enumerates", testFindReferencesEnumerates)
   , ("lsp_nav_findref_at_decl", testFindRefAtDecl)
   , ("lsp_nav_single_file_fallback_nonblocking", testNavSingleFileFallback)
+  , ("lsp_debounce_coalesces_to_trailing", testDebounceCoalesces)
   ]
+
+{- | GUARD: a burst of change events coalesces to exactly the TRAILING
+action — the superseded edit's timer fires but finds its generation stale.
+The +1/+10 encoding distinguishes "ran once, the right one" (10) from
+"ran both" (11) and "ran the wrong one" (1).
+-}
+testDebounceCoalesces :: IO Bool
+testDebounceCoalesces = do
+  counter <- newIORef (0 :: Int)
+  let uri = filePathToUri "/lsp-debounce-test.nix"
+  Handlers.debounceFor uri (modifyIORef' counter (+ 1))
+  Handlers.debounceFor uri (modifyIORef' counter (+ 10))
+  -- 2x the 200ms debounce window: both timers have fired by now.
+  threadDelay 400_000
+  (== 10) <$> readIORef counter

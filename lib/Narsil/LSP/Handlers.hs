@@ -38,13 +38,14 @@ module Narsil.LSP.Handlers (
   semanticLegend,
   enrichInferEnv,
   enrichInferEnvBatch,
+  debounceFor,
 )
 where
 
-import Control.Concurrent (threadDelay)
+import Control.Concurrent (forkIO, threadDelay)
 import Control.Exception (SomeException, try)
 import Control.Exception qualified as Exc
-import Control.Monad (join)
+import Control.Monad (join, when)
 import Control.Monad.IO.Class (MonadIO (..))
 import Data.Aeson (eitherDecodeFileStrict)
 import Data.Aeson qualified as Aeson
@@ -53,7 +54,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Char (isAlphaNum)
 import Data.Coerce (coerce)
 import Data.Foldable (toList)
-import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
+import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
 import Data.List (inits, nub)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map.Strict qualified as Map
@@ -427,12 +428,45 @@ documentChangeHandler notif = do
   let txt = maybe (firstChangeText cs) virtualFileText mvf
   _ <- liftIO (noteGoodParse uri txt)
   (cfg, env, path) <- diagCtx uri
-  let diags = fullLint cfg env path txt
-  sendNotification SMethod_TextDocumentPublishDiagnostics $
-    PublishDiagnosticsParams uri Nothing diags
+  lspEnv <- getLspEnv
+  -- Debounced: lint + publish fire only after the keystroke burst goes
+  -- quiet (trailing edge), so 100 rapid keypresses cost one lint, not 100.
+  -- The buffer text is captured per-edit; a superseded edit's timer fires
+  -- but finds its generation stale and does nothing.
+  liftIO $ debounceFor uri $ do
+    let diags = fullLint cfg env path txt
+    runLspT lspEnv $
+      sendNotification SMethod_TextDocumentPublishDiagnostics $
+        PublishDiagnosticsParams uri Nothing diags
   -- Re-seed the warm frontier to the edited file's nixpkgs references (a focus
   -- change is a single swap, never a restart — in-flight evals still land).
   liftIO (swapFocus warmPool (pkgsReferences txt))
+
+-- | Per-buffer debounce generation counters; see 'debounceFor'.
+debounceGenRef :: IORef (Map.Map Uri Int)
+debounceGenRef = unsafePerformIO (newIORef Map.empty)
+{-# NOINLINE debounceGenRef #-}
+
+-- | Quiet period before change-triggered diagnostics publish.
+debounceMicros :: Int
+debounceMicros = 200_000
+
+{- | Run @action@ once the buffer's edit stream has been quiet for
+'debounceMicros': every call bumps the buffer's generation and schedules a
+delayed check; only the timer whose generation is still current runs, so a
+burst of edits coalesces into the single trailing action.
+-}
+debounceFor :: Uri -> IO () -> IO ()
+debounceFor uri action = do
+  myGen <-
+    atomicModifyIORef' debounceGenRef $ \m ->
+      let g = 1 + Map.findWithDefault 0 uri m
+       in (Map.insert uri g m, g)
+  _ <- forkIO $ do
+    threadDelay debounceMicros
+    current <- Map.findWithDefault 0 uri <$> readIORef debounceGenRef
+    when (current == myGen) action
+  pure ()
 
 firstChangeText :: [TextDocumentContentChangeEvent] -> Text
 firstChangeText (TextDocumentContentChangeEvent change : _)
@@ -469,6 +503,10 @@ documentSaveHandler notif = do
 documentCloseHandler :: TNotificationMessage 'Method_TextDocumentDidClose -> LspM () ()
 documentCloseHandler notif = do
   let TNotificationMessage _ _ (DidCloseTextDocumentParams (TextDocumentIdentifier uri)) = notif
+  -- Drop the buffer's debounce entry BEFORE clearing diagnostics: a pending
+  -- change-timer that fires after close finds its generation gone and stays
+  -- silent, instead of republishing stale diagnostics onto a closed buffer.
+  liftIO $ atomicModifyIORef' debounceGenRef (\m -> (Map.delete uri m, ()))
   sendNotification SMethod_TextDocumentPublishDiagnostics $
     PublishDiagnosticsParams uri Nothing []
 
