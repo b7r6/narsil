@@ -47,7 +47,12 @@ run =
         -- simple and the buffers small (Nix files, not novels).
         options =
           defaultOptions
-            { optTextDocumentSync =
+            { -- Without a declared trigger character, clients only request
+              -- completion mid-word: `pkgs.` never auto-fires (eglot asks
+              -- after "." ONLY if the server advertises it), which silently
+              -- benches the panopticon's whole dotted-member tier.
+              optCompletionTriggerCharacters = Just ['.']
+            , optTextDocumentSync =
                 Just
                   TextDocumentSyncOptions
                     { _openClose = Just True
