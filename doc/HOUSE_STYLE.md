@@ -1,5 +1,5 @@
 <!--
-  // hypermodern // haskell // narsil
+  // b7r6 // haskell // narsil
   Adapted from the "Production Haskell" guide (gist 2f558f27) for this repo's
   GHC 9.12 / GHC2021 pin, two-space fourmolu, katip, and the nix-flake-check
   gate. Treat it as living: where we deviate, the deviation is documented here,
@@ -9,7 +9,7 @@
   epigraph watermarks, 100-column discipline, comment capitalization.
 -->
 
-# `// hypermodern // haskell // narsil`
+# `// b7r6 // haskell // narsil`
 
 > Companion: **[TYPOGRAPHY.md](TYPOGRAPHY.md)** — the visual conventions (Unicode
 > delimiters, 100-column banners, epigraph watermarks). This document is *what to

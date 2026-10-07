@@ -1,6 +1,6 @@
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-                                                    // straylight // conventions
+                                                          // b7r6 // conventions
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
    "The deck was empty. The Dornier hovered, then darted away to its nest.
@@ -97,7 +97,7 @@ and demanding enough that any careless edit is likely to stand out.
 # `// typographical // conventions`
 
 This document specifies the typographical standards for all code and documentation
-within the `straylight` codebase. These conventions are not decorative — they encode
+within the codebase. These conventions are not decorative — they encode
 information, establish provenance, and serve as watermarks against tampering.
 
 ```
@@ -134,8 +134,8 @@ regenerates a banner from memory — each lands the right edge somewhere other t
 
 ## `// load-bearing`
 
-One will note that almost all of the epigraphs in the initial `straylight`
-infratructure comes from William Gibson's Sprawl Trilogy. This is not
+One will note that almost all of the epigraphs in the initial
+infrastructure comes from William Gibson's Sprawl Trilogy. This is not
 sustainable for the duration and scope of the Continuity Project. We are
 sure many beloved works of art and other monuments to human creativity
 will in time become part of the lexicon.

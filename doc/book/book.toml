@@ -7,5 +7,5 @@ src = "src"
 [output.html]
 default-theme = "navy"
 preferred-dark-theme = "navy"
-git-repository-url = "https://github.com/hypermodern-consulting/narsil"
-edit-url-template = "https://github.com/hypermodern-consulting/narsil/edit/main/doc/book/{path}"
+git-repository-url = "https://github.com/b7r6/narsil"
+edit-url-template = "https://github.com/b7r6/narsil/edit/main/doc/book/{path}"

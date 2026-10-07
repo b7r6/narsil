@@ -35,7 +35,7 @@ mkDerivation {
     tasty-bench text time
   ];
   doHaddock = false;
-  homepage = "https://github.com/hypermodern-consulting/narsil";
+  homepage = "https://github.com/b7r6/narsil";
   description = "A type checker, linter, and language server for Nix";
   license = lib.meta.getLicenseFromSpdxId "MIT";
 }

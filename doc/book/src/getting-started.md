@@ -6,14 +6,14 @@ narsil is distributed as a Nix flake. Three ways to run it:
 
 ```bash
 # Run directly without installing (replace command as needed)
-nix run github:hypermodern-consulting/narsil -- check ./
+nix run github:b7r6/narsil -- check ./
 
 # Build the binary locally
-nix build github:hypermodern-consulting/narsil
+nix build github:b7r6/narsil
 ./result/bin/narsil check ./
 
 # Clone and enter a development shell
-git clone https://github.com/hypermodern-consulting/narsil
+git clone https://github.com/b7r6/narsil
 cd narsil
 nix develop    # provides ghc, cabal, hls, hlint, mdbook
 cabal build    # build from source
@@ -302,7 +302,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@v4
-      - run: nix run github:hypermodern-consulting/narsil -- check ./
+      - run: nix run github:b7r6/narsil -- check ./
 ```
 
 For Nix-based CI, add a `checks` entry to your flake:
@@ -491,13 +491,13 @@ If nothing matches, the kind is `Unknown` and the file passes without check.
 ```bash
 # 1. Copy the example config
 curl -o .narsil.dhall \
-  https://raw.githubusercontent.com/hypermodern-consulting/narsil/main/.narsil.dhall.example
+  https://raw.githubusercontent.com/b7r6/narsil/main/.narsil.dhall.example
 
 # 2. Adjust the profile and add ignores for vendored code
 #    Edit .narsil.dhall — set extra-ignores for vendor/, third-party/, etc.
 
 # 3. Run the full CI check
-nix run github:hypermodern-consulting/narsil -- check ./
+nix run github:b7r6/narsil -- check ./
 
 # 4. Fix violations one at a time, starting with the lowest-hanging fruit
 ```

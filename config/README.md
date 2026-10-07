@@ -37,7 +37,7 @@ Or copy `.narsil.dhall.example` from this repo.
 
 | Profile | Use Case | `non-lisp-case` | `rec` | `with lib` |
 |---------|----------|-----------------|-------|------------|
-| `strict` | New straylight projects | error | error | error |
+| `strict` | New projects | error | error | error |
 | `standard` | Most projects | off | warning | error |
 | `minimal` | Legacy codebases | off | off | warning |
 | `nixpkgs` | nixpkgs contributions | off | off | warning |
@@ -54,7 +54,7 @@ Full straylight conventions. Enforces:
 - Prelude wrappers for derivations
 - No `rec`, no `with`
 
-Use for new straylight projects or projects that want maximum rigor.
+Use for new projects or projects that want maximum rigor.
 
 
 ## // standard

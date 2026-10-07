@@ -1,6 +1,6 @@
 # // narsil //
 
-> *"The Sword that was Broken shall be reforged."*
+> _"The Sword that was Broken shall be reforged."_
 
 Compile-time static analysis for Nix expressions and embedded bash scripts —
 a Hindley-Milner type checker, linter, and language server that holds
@@ -16,7 +16,7 @@ floor of 28 files, every one of them named and classified
 
 ## // credit //
 
-narsil is written almost entirely by [Claude](https://claude.ai) (Anthropic) —
+`narsil` is written almost entirely by [Claude](https://claude.ai) (Anthropic) —
 the bulk of the engine, the verification apparatus, and the LSP by **Claude
 Opus 4.6**, with later rounds (the module-system ontology, the false-positive
 endgame, the strictness hierarchy, the LSP debt closure) by **Claude Fable 5** —
@@ -48,20 +48,20 @@ Or read the source markdown directly:
 
 ```bash
 # Run all checks on a project (auto-detects .sh, .nix, or directory)
-nix run github:hypermodern-consulting/narsil -- check ./
+nix run github:b7r6/narsil -- check ./
 
 # Check a single file
-nix run github:hypermodern-consulting/narsil -- check ./default.nix
+nix run github:b7r6/narsil -- check ./default.nix
 
 # Infer types and add annotation comments
-nix run github:hypermodern-consulting/narsil -- infer ./default.nix
+nix run github:b7r6/narsil -- infer ./default.nix
 
 # Generate typed config emitter
-nix run github:hypermodern-consulting/narsil -- emit ./configure.sh
+nix run github:b7r6/narsil -- emit ./configure.sh
 
 # Show scope graph
-nix run github:hypermodern-consulting/narsil -- scope ./default.nix
+nix run github:b7r6/narsil -- scope ./default.nix
 
 # Start LSP server
-nix run github:hypermodern-consulting/narsil -- lsp
+nix run github:b7r6/narsil -- lsp
 ```

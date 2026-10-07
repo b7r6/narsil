@@ -9,10 +9,10 @@ description:        Hindley-Milner type inference for the Nix expression languag
                     bash analysis, and an LSP server.
 license:            MIT
 license-file:       LICENSE
-author:             Hypermodern Consulting
-maintainer:         https://github.com/hypermodern-consulting/narsil
-homepage:           https://github.com/hypermodern-consulting/narsil
-bug-reports:        https://github.com/hypermodern-consulting/narsil/issues
+author:             b7r6
+maintainer:         https://github.com/b7r6/narsil
+homepage:           https://github.com/b7r6/narsil
+bug-reports:        https://github.com/b7r6/narsil/issues
 category:           Development
 build-type:         Simple
 
