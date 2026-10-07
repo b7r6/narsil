@@ -116,6 +116,7 @@ import Narsil.LSP.Handlers.Project (
   getProjectCache,
   invalidateModuleGraphCache,
   latestNixpkgsIndex,
+  lookupLibIndex,
   lookupNixpkgsIndex,
   lookupOptionsIndex,
   resolveNixpkgsRoot,
@@ -543,7 +544,9 @@ hoverHandler req responder = do
     -- A typed target hovers its type (option doc appended); no type but an
     -- option doc → the doc alone; neither → null response, NO popup. The
     -- old "`no expression at cursor`" box was chrome with nothing to say.
-    let typed = contents env expr l c <$> inferExprAtWithEnv env expr (fromIntegral l) (fromIntegral c)
+    let typed =
+          contents env expr l c
+            <$> inferExprAtWithEnv env expr (fromIntegral l) (fromIntegral c)
         body =
           maybe
             (MarkupContent MarkupKind_Markdown <$> optDoc)
@@ -695,8 +698,16 @@ definitionHandler req responder = do
     let mHit = mIdx >>= \idx -> nixpkgsHit idx (fromIntegral l) (fromIntegral c) expr
         li = fromIntegral l
         ci = fromIntegral c
+    -- the LIB universe: `lib.<fn>` lands in the nixpkgs lib source file
+    -- that defines it (a parsed, eval-free index of lib/*.nix)
+    mLib <-
+      maybe
+        (liftIO (libHit uri li ci expr))
+        (const (pure Nothing))
+        mHit
     case mHit of -- CASE-OK: shape dispatch
       Just sp -> emitNixpkgsLoc uri sp
+      Nothing | Just (f, sp) <- mLib -> emitSpanIn f sp
       Nothing ->
         -- option-declaration jump: a `config.…` (or cfg-aliased) definition
         -- navigates to its mkOption declaration in the same buffer
@@ -733,6 +744,11 @@ definitionHandler req responder = do
   nixpkgsHit idx l c expr = do
     (base, key) <- selectAtCursor l c expr
     if base == "pkgs" then Nixpkgs.lookupPackage idx key else Nothing
+  libHit uri l c expr =
+    maybe (pure Nothing) lookupKey (selectAtCursor l c expr)
+   where
+    lookupKey ("lib", key) = (>>= Map.lookup key) <$> lookupLibIndex uri
+    lookupKey _ = pure Nothing
   scopePath uri l c expr = do
     sg <- liftIO $ buildCrossScopeGraphWith uri (Just expr)
     mIdx <- liftIO $ lookupNixpkgsIndex uri
@@ -749,7 +765,11 @@ definitionHandler req responder = do
                 maybe
                   "the nixpkgs index is still building; try again in a moment"
                   ( const
-                      ("`pkgs." <> key <> "` is not in the nixpkgs index (overlay-provided attributes are not indexed yet)")
+                      ( "`pkgs."
+                          <> key
+                          <> "` is not in the nixpkgs index"
+                          <> " (overlay-provided attributes are not indexed yet)"
+                      )
                   )
                   mIdx
         fallbackWhy =

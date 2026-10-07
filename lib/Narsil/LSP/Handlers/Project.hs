@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -27,6 +28,8 @@ module Narsil.LSP.Handlers.Project (
   findProjectRoot,
   lookupModuleGraph,
   lookupNixpkgsIndex,
+  lookupLibIndex,
+  buildLibIndex,
   lookupOptionsIndex,
   warmNixpkgsIndex,
   latestNixpkgsIndex,
@@ -45,6 +48,8 @@ import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as LBS
 import Data.Foldable (toList)
+import Data.List (isSuffixOf, sortOn)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map.Strict qualified as Map
 import Data.Maybe (listToMaybe)
 import Data.Set (Set)
@@ -52,6 +57,8 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Language.LSP.Protocol.Types (Uri, uriToFilePath)
+import Narsil.Core.Safety qualified as Safety
+import Narsil.Core.Span qualified as CSpan
 import Narsil.Inference.Nix (TypeEnv (..), builtinEnv, extendImport)
 import Narsil.LSP.ProjectCache qualified as PC
 import Narsil.Layout.Closure qualified as Closure
@@ -60,11 +67,14 @@ import Narsil.Layout.Scope qualified as Scope
 import Narsil.Nixpkgs.Index qualified as Nixpkgs
 import Narsil.Nixpkgs.OptionsIndex qualified as Opts
 import Narsil.Nixpkgs.StorePath (fixedOutputSourcePath)
+import Narsil.Syntax.Annotation (varNameText, pattern LayerAnn)
+import Nix.Expr.Types (Binding (..), NExprF (..), NKeyName (..), NPos (..), NSourcePos (..))
 import Nix.Expr.Types.Annotated (NExprLoc)
-import System.Directory (canonicalizePath, doesDirectoryExist, doesFileExist)
+import System.Directory (canonicalizePath, doesDirectoryExist, doesFileExist, listDirectory)
 import System.Environment (lookupEnv)
 import System.FilePath (takeDirectory, (</>))
 import System.IO.Unsafe (unsafePerformIO)
+import Text.Megaparsec.Pos (unPos)
 
 {-# NOINLINE moduleGraphCache #-}
 moduleGraphCache :: MVar (Map.Map FilePath Mod.ModuleGraph)
@@ -119,6 +129,69 @@ nixpkgsIndexCache = unsafePerformIO (newMVar Map.empty)
 -}
 optionsIndexCache :: MVar (Map.Map FilePath Opts.OptionsIndex)
 optionsIndexCache = unsafePerformIO (newMVar Map.empty)
+
+{-# NOINLINE libIndexCache #-}
+
+{- | nixpkgs LIB function index: name -> (defining file, span of the binding),
+built by PARSING @<nixpkgs>/lib/*.nix@ — no eval, ~40 small files, one-time
+per checkout root (same store-path-permanence doctrine as
+'nixpkgsIndexCache'). Powers go-to-definition on @lib.<fn>@, which the
+package index cannot serve: `lib.optionals` should land in lib/lists.nix,
+not report \"no definitions found\".
+-}
+libIndexCache :: MVar (Map.Map FilePath (Map.Map Text (FilePath, CSpan.Span)))
+libIndexCache = unsafePerformIO (newMVar Map.empty)
+
+-- | The lib index for the buffer's nixpkgs root (built on first use).
+lookupLibIndex :: Uri -> IO (Maybe (Map.Map Text (FilePath, CSpan.Span)))
+lookupLibIndex uri =
+  resolveNixpkgsRoot uri >>= maybe (pure Nothing) (fmap Just . cached)
+ where
+  cached root = modifyMVar libIndexCache $ \m ->
+    maybe
+      (buildLibIndex (root </> "lib") >>= \idx -> pure (Map.insert root idx m, idx))
+      (\idx -> pure (m, idx))
+      (Map.lookup root m)
+
+{- | Every statically-named binding in every @lib/*.nix@ (any depth — the lib
+files are one big attrset each, sometimes nested). First definition wins on
+name collisions across files (alphabetical file order; collisions are rare
+and any landing beats none).
+-}
+buildLibIndex :: FilePath -> IO (Map.Map Text (FilePath, CSpan.Span))
+buildLibIndex dir = do
+  exists <- doesDirectoryExist dir
+  if not exists
+    then pure Map.empty
+    else do
+      entries <- listDirectory dir
+      let files = [dir </> f | f <- sortOn id entries, ".nix" `isSuffixOf` f, f /= "default.nix"]
+      Map.unions <$> mapM fileBindings files
+ where
+  fileBindings f =
+    either (const Map.empty) (bindingMap f) <$> Safety.safeParseNixFile f
+  bindingMap f expr = Map.fromList [(n, (f, sp)) | (n, sp) <- walk expr]
+  walk node@(LayerAnn _ e) = named e ++ concatMap walk (children node)
+  named (NSet _ bs) = concatMap bound bs
+  named (NLet bs _) = concatMap bound bs
+  named _ = []
+  bound (NamedVar (StaticKey k :| []) _ (NSourcePos _ (NPos l) (NPos c))) =
+    [(varNameText k, CSpan.Span loc loc Nothing)]
+   where
+    loc = CSpan.Loc (unPos l) (unPos c)
+  bound _ = []
+  children (LayerAnn _ e) = childrenOf e
+  childrenOf (NSet _ bs) = concatMap bindingChild bs
+  childrenOf (NLet bs b) = concatMap bindingChild bs ++ [b]
+  childrenOf (NAbs _ b) = [b]
+  childrenOf (NIf c1 t1 f1) = [c1, t1, f1]
+  childrenOf (NWith a b) = [a, b]
+  childrenOf (NAssert a b) = [a, b]
+  childrenOf (NApp a b) = [a, b]
+  childrenOf (NBinary _ a b) = [a, b]
+  childrenOf _ = []
+  bindingChild (NamedVar _ v _) = [v]
+  bindingChild (Inherit ms _ _) = maybe [] pure ms
 
 {-# NOINLINE optionsIndexInflight #-}
 optionsIndexInflight :: MVar (Set.Set FilePath)

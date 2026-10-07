@@ -40,7 +40,15 @@ import Narsil.Inference.Nix (TypeEnv, builtinEnv, inferExprWithEnv)
 import Narsil.Inference.Nix qualified as Infer
 import Narsil.Inference.Nix.Type qualified as NT
 import Narsil.Syntax.Annotation (srcSpanToSpan, varNameText, pattern Layer, pattern LayerAnn)
-import Nix.Expr.Types (Binding (..), NExprF (..), NKeyName (..), Params (..), Recursivity (..))
+import Nix.Expr.Types (
+  Antiquoted (..),
+  Binding (..),
+  NExprF (..),
+  NKeyName (..),
+  NString (..),
+  Params (..),
+  Recursivity (..),
+ )
 import Nix.Expr.Types.Annotated (NExprLoc)
 import Nix.Expr.Types.Annotated qualified as Nix
 
@@ -58,7 +66,7 @@ findExprAt l c = go
     | not (spContains (getSpan e)) = Nothing
     | otherwise = Just (fromMaybe e (listToMaybe (mapMaybe go (childExprs' e))))
   childExprs' (Layer (NConstant _)) = []
-  childExprs' (Layer (NStr _)) = []
+  childExprs' (Layer (NStr str)) = antiquotes str
   childExprs' (Layer (NLiteralPath _)) = []
   childExprs' (Layer (NEnvPath _)) = []
   childExprs' (Layer (NSym _)) = []
@@ -82,7 +90,10 @@ findExprAt l c = go
 -- | The immediate sub-expressions of one AST node (one level deep).
 childExprs :: NExprF NExprLoc -> [NExprLoc]
 childExprs (NConstant _) = []
-childExprs (NStr _) = []
+-- antiquoted sub-expressions are REAL code — without descending here,
+-- everything inside "--flag=${lib.concatStringsSep …}" is invisible to
+-- hover, go-to-definition, and completion context
+childExprs (NStr str) = antiquotes str
 childExprs (NLiteralPath _) = []
 childExprs (NEnvPath _) = []
 childExprs (NSym _) = []
@@ -103,6 +114,11 @@ childExprs (NSynHole _) = []
 bindExprs :: Binding NExprLoc -> [NExprLoc]
 bindExprs (NamedVar _ e _) = [e]
 bindExprs (Inherit mScope _ _) = maybeToList mScope
+
+-- | The antiquoted (@${…}@) sub-expressions of a string literal.
+antiquotes :: NString NExprLoc -> [NExprLoc]
+antiquotes (DoubleQuoted parts) = [e | Antiquoted e <- parts]
+antiquotes (Indented _ parts) = [e | Antiquoted e <- parts]
 
 {- | Pretty type of the expression at the cursor, inferred against the builtin
   env only. See 'inferExprAtWithEnv'.
@@ -169,7 +185,8 @@ inferExprAtWithEnv env expr l c = do
           ]
         r = inferExprWithEnv env expr
         withTyped = foldr (\(n, t) e -> Infer.extendEnv n (NT.Forall [] t) e) env typed
-        bindAny n e = maybe (Infer.extendEnv n (NT.Forall [] NT.TAny) e) (const e) (Infer.lookupEnv n e)
+        bindAny n e =
+          maybe (Infer.extendEnv n (NT.Forall [] NT.TAny) e) (const e) (Infer.lookupEnv n e)
      in foldr bindAny withTyped (lexicalBindersAt l c expr)
   -- An unbound variable can still happen (dynamic scopes, `with`); it says
   -- nothing about the expression's health. Unbound → no hover; only a real
