@@ -17,9 +17,11 @@ permissions:
   pages: write
   id-token: write
 
+# One deployment at a time; queued runs collapse to the latest, but an
+# in-progress production deploy is never cancelled mid-flight.
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -27,6 +29,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v27
+      # Fails fast with a clear message if Pages isn't enabled yet
+      # (Settings → Pages → Source → GitHub Actions).
+      - uses: actions/configure-pages@v5
       - run: nix run .#doc -- build doc/book
       - uses: actions/upload-pages-artifact@v3
         with:
@@ -40,4 +45,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
