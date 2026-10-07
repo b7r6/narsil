@@ -93,10 +93,12 @@
 
             devShells.default = pkgs.mkShell {
               name = "narsil-dev";
+
               inputsFrom = [
                 narsil.env
                 config.treefmt.build.devShell
               ];
+
               buildInputs = [
                 pkgs.ghc
                 pkgs.cabal-install
@@ -116,15 +118,19 @@
                 pkgs.jq
                 pkgs.mdbook
               ];
+
               shellHook = ''
+                # Pin the devshell's ghc into buck2's toolchain config so the
+                # nix store path lands in action command lines — remote-cache
+                # keys then change when GHC does. (.buckconfig.local is
+                # buck2-merged, gitignored, regenerated on every shell entry.)
+                printf '[narsil]\n  ghc_bindir = %s\n' "$(dirname "$(command -v ghc)")" \
+                  > .buckconfig.local
                 echo "narsil development shell"
                 echo "  narsil parse <script>   Show facts"
                 echo "  narsil infer <script>   Show schema (JSON)"
                 echo "  narsil check <script>   Check policies"
                 echo "  treefmt                      Format all sources"
-
-
-
               '';
             };
 

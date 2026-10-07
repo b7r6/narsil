@@ -12,10 +12,10 @@
   fbcode_macros = none
   buck = none
 
-# Uses a copy of the prelude bundled with the buck2 binary. You can alternatively delete this
-# section and vendor a copy of the prelude to the `prelude` directory of your project.
-[external_cells]
-  prelude = bundled
+# The prelude is VENDORED (the bundled copy of this buck2 binary, extracted
+# verbatim) with one narsil patch: the haskell compile/link actions pass
+# allow_cache_upload so they participate in the NativeLink action cache —
+# grep 'narsil patch' under prelude/. Worth a PR to facebook/buck2-prelude.
 
 # root//buck/platforms:default is the prelude's default platform, copied (as
 # its comment instructs) so the executor can participate in the NativeLink

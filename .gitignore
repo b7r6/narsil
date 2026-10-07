@@ -2,3 +2,4 @@ dist-newstyle/
 doc/book/book/
 *.hp
 buck-out/
+.buckconfig.local

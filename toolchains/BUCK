@@ -5,8 +5,8 @@
 load("@prelude//tests:test_toolchain.bzl", "noop_test_toolchain")
 load("@prelude//toolchains:cxx.bzl", "system_cxx_toolchain")
 load("@prelude//toolchains:genrule.bzl", "system_genrule_toolchain")
-load("@prelude//toolchains:haskell.bzl", "system_haskell_toolchain")
 load("@prelude//toolchains:python.bzl", "system_python_bootstrap_toolchain")
+load("@toolchains//:haskell.bzl", "narsil_haskell_toolchain")
 
 system_cxx_toolchain(
     name = "cxx",
@@ -18,7 +18,7 @@ system_genrule_toolchain(
     visibility = ["PUBLIC"],
 )
 
-system_haskell_toolchain(
+narsil_haskell_toolchain(
     name = "haskell",
     visibility = ["PUBLIC"],
 )
