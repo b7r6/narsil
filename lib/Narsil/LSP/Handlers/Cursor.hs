@@ -154,10 +154,16 @@ inferExprAtWithEnv env expr l c = do
     viaValue =
       maybe (inferTarget' target) inferTarget' (bindingValueAt (l + 1) (c + 1) expr)
   inferTarget' te =
-    either
-      (const (Just "TYPE_ERROR"))
-      (\(t, _) -> Just (NT.prettyType t))
-      (inferExprWithEnv env te)
+    either fromError (\(t, _) -> Just (NT.prettyType t)) (inferExprWithEnv env te)
+  -- The sub-expression is inferred IN ISOLATION, so variables bound by an
+  -- enclosing lambda/let are simply absent here — an unbound-variable
+  -- failure says nothing about the expression's health (hovering
+  -- `inputs.treefmt-nix.flakeModule` inside the outputs lambda rendered
+  -- TYPE_ERROR on a clean file). Unbound → no hover; only a real type
+  -- clash in the target itself concedes TYPE_ERROR.
+  fromError err
+    | "unbound variable" `T.isInfixOf` err = Nothing
+    | otherwise = Just "TYPE_ERROR"
 
 {- | The VALUE expression of the let\/attrset binding whose NAME token
 contains the 1-based cursor — the thing to infer when the cursor sits on a

@@ -70,6 +70,13 @@ unifyFunctor funT attrsT
   lookupFunctor ft m open = dispatch (Map.lookup "__functor" m)
    where
     dispatch (Just (TFun _ innerT, _)) = unify innerT ft
+    -- an Any functor is the opaque-value escape hatch (flake inputs, untyped
+    -- imports): calling it must stay callable — `flake-parts.lib.mkFlake`
+    -- through an opaque input was erroring here on narsil's own flake
+    dispatch (Just (TAny, _)) = pure ()
+    -- an unsolved functor variable: bind it to a function shape (self ->
+    -- expected) instead of rejecting a type we haven't finished inferring
+    dispatch (Just (v@(TVar _), _)) = unify v (TFun TAny ft)
     dispatch (Just (ftFunctor, _)) =
       throwTypeError $ "__functor must be a function, got " <> prettyType ftFunctor
     -- an OPEN record's unknown tail may carry __functor

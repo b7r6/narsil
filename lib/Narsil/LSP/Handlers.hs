@@ -540,16 +540,18 @@ hoverHandler req responder = do
     -- the options universe speaks on hover too: a `config.…` select (alias-
     -- aware) appends its declared type, documentation, and declaring file
     optDoc <- liftIO (optionHoverDoc uri (fromIntegral l) (fromIntegral c) expr)
-    hover
-      ( withOptDoc optDoc $
+    -- A typed target hovers its type (option doc appended); no type but an
+    -- option doc → the doc alone; neither → null response, NO popup. The
+    -- old "`no expression at cursor`" box was chrome with nothing to say.
+    let typed = contents env expr l c <$> inferExprAtWithEnv env expr (fromIntegral l) (fromIntegral c)
+        body =
           maybe
-            noExpr
-            (contents env expr l c)
-            (inferExprAtWithEnv env expr (fromIntegral l) (fromIntegral c))
-      )
+            (MarkupContent MarkupKind_Markdown <$> optDoc)
+            (Just . withOptDoc optDoc)
+            typed
+    maybe (responder $ Right $ InR Null) hover body
   withOptDoc mDoc (MarkupContent k v) =
     MarkupContent k (v <> maybe "" ("\n\n" <>) mDoc)
-  noExpr = MarkupContent MarkupKind_Markdown "`no expression at cursor`"
   contents env expr l c t =
     MarkupContent MarkupKind_Markdown (rendered <> optInfo)
    where
