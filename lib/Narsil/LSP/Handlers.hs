@@ -80,7 +80,8 @@ import Narsil.LSP.Handlers.Cursor (
   bindingValueByName,
   findExprAt,
   inferExprAt,
-  inferExprAtWithEnv,
+  inferExprAtWithBindings,
+  inferFileBindings,
   selectAtCursor,
   selectPathAtCursor,
  )
@@ -569,8 +570,11 @@ hoverHandler req responder = do
     | positionInComment (virtualFileText vf) (fromIntegral l) (fromIntegral c) =
         responder $ Right $ InR Null
     | otherwise =
-        maybe (hover parseErr) (withExpr uri pos) (lspSafeParse (virtualFileText vf))
-  withExpr uri (Position l c) expr = do
+        maybe
+          (hover parseErr)
+          (withExpr uri (virtualFileText vf) pos)
+          (lspSafeParse (virtualFileText vf))
+  withExpr uri txt (Position l c) expr = do
     baseEnv <- liftIO $ buildCrossEnv uri
     enriched <- liftIO $ enrichPkgsOracle uri expr baseEnv
     -- module-shaped buffers hover with the declared spine bound, exactly
@@ -579,12 +583,16 @@ hoverHandler req responder = do
     -- the options universe speaks on hover too: a `config.…` select (alias-
     -- aware) appends its declared type, documentation, and declaring file
     optDoc <- liftIO (optionHoverDoc uri (fromIntegral l) (fromIntegral c) expr)
+    -- The whole-file inference, MEMOIZED per buffer — repeated hovers on an
+    -- unchanged file reuse it instead of re-inferring (O(file), was seconds on
+    -- large modules).
+    bindings <- liftIO (cachedFileBindings uri txt env expr)
     -- A typed target hovers its type (option doc appended); no type but an
     -- option doc → the doc alone; neither → null response, NO popup. The
     -- old "`no expression at cursor`" box was chrome with nothing to say.
     let typed =
           contents env expr l c
-            <$> inferExprAtWithEnv env expr (fromIntegral l) (fromIntegral c)
+            <$> inferExprAtWithBindings env bindings expr (fromIntegral l) (fromIntegral c)
         body =
           maybe
             (MarkupContent MarkupKind_Markdown <$> optDoc)
@@ -1333,6 +1341,33 @@ type a field name.
 -}
 lastGoodParseRef :: IORef (Map.Map Uri NExprLoc)
 lastGoodParseRef = unsafePerformIO (newIORef Map.empty)
+
+{-# NOINLINE fileBindingsRef #-}
+
+{- | Memoized whole-file inference per buffer, keyed by EXACT content. A hover
+re-infers the whole file (O(file)) to find the type at a point; without this it
+did so on every hover, which was seconds on a large module. Keyed by text
+equality: an edit (new content) misses and recomputes; a repeat hover on the
+same buffer reuses. The env is captured at compute time, so a type refines on
+the next edit after the background oracle warms — the fast, best-effort tradeoff
+hover makes everywhere else.
+-}
+fileBindingsRef :: IORef (Map.Map Uri (Text, [Infer.Binding]))
+fileBindingsRef = unsafePerformIO (newIORef Map.empty)
+
+{- | The buffer's 'fileBindings', from the memo on a content match, else freshly
+computed and stored (forced so the inference runs once, here).
+-}
+cachedFileBindings :: Uri -> Text -> TypeEnv -> NExprLoc -> IO [Infer.Binding]
+cachedFileBindings uri txt env expr = do
+  cached <- Map.lookup uri <$> readIORef fileBindingsRef
+  maybe compute pure (cached >>= reuse)
+ where
+  reuse (t, bs) = if t == txt then Just bs else Nothing
+  compute = do
+    let bs = inferFileBindings env expr
+    length bs `seq` modifyIORef' fileBindingsRef (Map.insert uri (txt, bs))
+    pure bs
 
 noteGoodParse :: Uri -> Text -> IO (Maybe NExprLoc)
 noteGoodParse uri txt =

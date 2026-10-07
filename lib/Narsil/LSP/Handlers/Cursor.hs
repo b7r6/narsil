@@ -21,6 +21,8 @@ module Narsil.LSP.Handlers.Cursor (
   childExprs,
   inferExprAt,
   inferExprAtWithEnv,
+  inferExprAtWithBindings,
+  inferFileBindings,
   exprName,
   selectAtCursor,
   selectPathAtCursor,
@@ -133,14 +135,26 @@ inferExprAt = inferExprAtWithEnv builtinEnv
   the broken expression itself yields @"TYPE_ERROR"@.
 -}
 inferExprAtWithEnv :: TypeEnv -> NExprLoc -> Int -> Int -> Maybe Text
-inferExprAtWithEnv env expr l c = do
+inferExprAtWithEnv env expr = inferExprAtWithBindings env (inferFileBindings env expr) expr
+
+{- | The whole-file inference the position lookup needs: one full pass over the
+file (every binding's type). This is the O(file) cost — the hover path memoizes
+it per buffer (see 'inferFileBindings' callers) so repeated hovers on an unchanged
+file don't re-run it, which on a large module was seconds PER hover.
+-}
+inferFileBindings :: TypeEnv -> NExprLoc -> [Infer.Binding]
+inferFileBindings env expr =
+  either (const (Infer.inferExprBindingsPartial env expr)) snd (inferExprWithEnv env expr)
+
+{- | 'inferExprAtWithEnv' with the whole-file 'inferFileBindings' ALREADY computed —
+the memoized hover entry point. The bindings feed both the name\/span lookup and
+the sub-expression fallback's env, so a sub-expression hover no longer re-infers
+the whole file a second time (it did, via a duplicate pass).
+-}
+inferExprAtWithBindings :: TypeEnv -> [Infer.Binding] -> NExprLoc -> Int -> Int -> Maybe Text
+inferExprAtWithBindings env bindings expr l c = do
   target <- findExprAt l c expr
-  let bindings =
-        either
-          (const (Infer.inferExprBindingsPartial env expr))
-          snd
-          (inferExprWithEnv env expr)
-  fromBindings target bindings
+  fromBindings target
  where
   -- three chances before giving up: the target's NAME in the bindings, the
   -- cursor sitting ON a binding-name token (a name is not an expression, so
@@ -152,7 +166,7 @@ inferExprAtWithEnv env expr l c = do
   -- the binding's VALUE inferred in isolation (a binding downstream of an
   -- unrelated error never entered the partial bindings — its own value may
   -- still type fine); finally the sub-expression at the cursor.
-  fromBindings target bindings =
+  fromBindings target =
     maybe viaValue (Just . namedType) (byName <|> bySpan)
    where
     byName = do
@@ -178,11 +192,9 @@ inferExprAtWithEnv env expr l c = do
   -- then every remaining lexically-enclosing binder as Any — a module param
   -- hovers as dynamic, exactly what the engine believes about it.
   envLocal =
-    let typed =
-          [ (n, t)
-          | Infer.Binding n t _ <- either (const (Infer.inferExprBindingsPartial env expr)) snd r
-          ]
-        r = inferExprWithEnv env expr
+    -- REUSE the already-computed whole-file bindings — do NOT infer the file a
+    -- second time here (that duplicate pass doubled every sub-expression hover).
+    let typed = [(n, t) | Infer.Binding n t _ <- bindings]
         withTyped = foldr (\(n, t) e -> Infer.extendEnv n (NT.Forall [] t) e) env typed
         bindAny n e =
           maybe (Infer.extendEnv n (NT.Forall [] NT.TAny) e) (const e) (Infer.lookupEnv n e)
