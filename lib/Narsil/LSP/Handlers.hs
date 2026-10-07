@@ -1051,12 +1051,19 @@ completionHandler req responder = do
     -- the OPTIONS universe: `config.…` (alias-aware) completes from the
     -- nixpkgs-wide declaration index
     optItems <- liftIO (optionCompletions uri txt li ci mExpr)
-    let chosen
-          | not (null nixItems) = nixItems
-          | not (null optItems) = optItems
-          | not (null members) = members
-          | otherwise = scopeItems
-    responder $ Right $ InL chosen
+    -- Index-backed tiers (nixpkgs packages/attrs, the options universe) are
+    -- CAPPED server-side, so the client must not cache-and-filter locally:
+    -- a bare item list is implicitly complete, and lsp-mode then fuzzy-
+    -- matches `git` against the first alphabetical page (agorakit wins,
+    -- git never arrives). isIncomplete=True forces a re-query per
+    -- keystroke, letting the server's prefix filter see the real prefix.
+    -- Scope/member tiers are small and genuinely complete.
+    let (chosen, incomplete)
+          | not (null nixItems) = (nixItems, True)
+          | not (null optItems) = (optItems, True)
+          | not (null members) = (members, False)
+          | otherwise = (scopeItems, False)
+    responder $ Right $ InR $ InL $ CompletionList incomplete Nothing chosen
   -- Package names are pure (index keys); a package's symbols go through the eval
   -- backend — the shape template today, the nixlang compiler when it lands.
   nixpkgsItems txt li ci idx =
