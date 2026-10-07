@@ -62,37 +62,21 @@ findExprAt l c = go
     (sl < targetLine || (sl == targetLine && sc <= targetCol))
       && (el > targetLine || (el == targetLine && ec >= targetCol))
   getSpan (LayerAnn sp _) = srcSpanToSpan sp
+  children (Layer ef) = childExprs ef
   go e
     | not (spContains (getSpan e)) = Nothing
-    | otherwise = Just (fromMaybe e (listToMaybe (mapMaybe go (childExprs' e))))
-  childExprs' (Layer (NConstant _)) = []
-  childExprs' (Layer (NStr str)) = antiquotes str
-  childExprs' (Layer (NLiteralPath _)) = []
-  childExprs' (Layer (NEnvPath _)) = []
-  childExprs' (Layer (NSym _)) = []
-  childExprs' (Layer (NList es)) = es
-  childExprs' (Layer (NSet _ bs)) = concatMap bindingExprs bs
-  childExprs' (Layer (NLet bs b)) = concatMap bindingExprs bs ++ [b]
-  childExprs' (Layer (NIf cond t f')) = [cond, t, f']
-  childExprs' (Layer (NWith s b)) = [s, b]
-  childExprs' (Layer (NAssert cond body)) = [cond, body]
-  childExprs' (Layer (NAbs (Param _) b)) = [b]
-  childExprs' (Layer (NAbs (ParamSet _ _ formals) b)) = [d | (_, Just d) <- formals] ++ [b]
-  childExprs' (Layer (NApp f' a)) = [f', a]
-  childExprs' (Layer (NSelect mDef obj _path)) = maybeToList mDef ++ [obj]
-  childExprs' (Layer (NHasAttr e1 _)) = [e1]
-  childExprs' (Layer (NUnary _ e1)) = [e1]
-  childExprs' (Layer (NBinary _ e1 e2)) = [e1, e2]
-  childExprs' (Layer (NSynHole _)) = []
-  bindingExprs (NamedVar _ e _) = [e]
-  bindingExprs (Inherit mScope _ _) = maybeToList mScope
+    | otherwise = Just (fromMaybe e (listToMaybe (mapMaybe go (children e))))
 
--- | The immediate sub-expressions of one AST node (one level deep).
+{- | The immediate sub-expressions of one AST node (one level deep). The SINGLE
+walker: findExprAt, selectAtCursor, lexicalBindersAt and the hover env all
+share it, so a dropped constructor can't leave a feature silently blind in one
+place but not another (which is exactly how three walkers drifted apart).
+Everything that is REAL code is reachable — a ParamSet formal's default, a
+select's @or@-default, and the antiquoted expression in a dynamic @${…}@ key of
+a select, has-attr, or binding path — not just the obvious children.
+-}
 childExprs :: NExprF NExprLoc -> [NExprLoc]
 childExprs (NConstant _) = []
--- antiquoted sub-expressions are REAL code — without descending here,
--- everything inside "--flag=${lib.concatStringsSep …}" is invisible to
--- hover, go-to-definition, and completion context
 childExprs (NStr str) = antiquotes str
 childExprs (NLiteralPath _) = []
 childExprs (NEnvPath _) = []
@@ -103,17 +87,32 @@ childExprs (NLet bs b) = concatMap bindExprs bs ++ [b]
 childExprs (NIf cond t f') = [cond, t, f']
 childExprs (NWith s b) = [s, b]
 childExprs (NAssert cond body) = [cond, body]
-childExprs (NAbs _ b) = [b]
+childExprs (NAbs params b) = paramExprs params ++ [b]
 childExprs (NApp f' a) = [f', a]
-childExprs (NSelect _ b _) = [b]
-childExprs (NHasAttr b _) = [b]
+childExprs (NSelect mDef obj path) =
+  maybeToList mDef ++ [obj] ++ concatMap keyExprs (toList path)
+childExprs (NHasAttr b path) = b : concatMap keyExprs (toList path)
 childExprs (NUnary _ e1) = [e1]
 childExprs (NBinary _ e1 e2) = [e1, e2]
 childExprs (NSynHole _) = []
 
+-- | The default-value expressions of a set-pattern's formals (@{ x ? e }@).
+paramExprs :: Params NExprLoc -> [NExprLoc]
+paramExprs (Param _) = []
+paramExprs (ParamSet _ _ formals) = [d | (_, Just d) <- formals]
+
 bindExprs :: Binding NExprLoc -> [NExprLoc]
-bindExprs (NamedVar _ e _) = [e]
+bindExprs (NamedVar path e _) = concatMap keyExprs (toList path) ++ [e]
 bindExprs (Inherit mScope _ _) = maybeToList mScope
+
+{- | The expression(s) inside a dynamic attr key: @${e}@ → @[e]@, a mixed
+string key @"${a}b${c}"@ → @[a, c]@. A static key has none.
+-}
+keyExprs :: NKeyName NExprLoc -> [NExprLoc]
+keyExprs (StaticKey _) = []
+keyExprs (DynamicKey (Plain str)) = antiquotes str
+keyExprs (DynamicKey (Antiquoted e)) = [e]
+keyExprs (DynamicKey EscapedNewline) = []
 
 -- | The antiquoted (@${…}@) sub-expressions of a string literal.
 antiquotes :: NString NExprLoc -> [NExprLoc]
