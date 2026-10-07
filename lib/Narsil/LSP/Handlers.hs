@@ -71,7 +71,9 @@ import Narsil.Core.Safety qualified as Safety
 import Narsil.Core.Span qualified as CSpan
 import Narsil.Inference.Nix (builtinEnv)
 import Narsil.Inference.Nix qualified as Infer
+import Narsil.Inference.Nix.Builtins (builtinSchemeTable)
 import Narsil.Inference.Nix.Environment (TypeEnv, withPkgsOracle)
+import Narsil.Inference.Nix.Lib (libSchemeTable)
 import Narsil.Inference.Nix.Module qualified as Module
 import Narsil.Inference.Nix.Type qualified as NT
 import Narsil.LSP.Handlers.Cursor (
@@ -531,7 +533,15 @@ hoverHandler req responder = do
   maybe (hover noFile) (withVf uri pos) mvf
  where
   hover markup = responder $ Right $ InL $ Hover{_contents = InL markup, _range = Nothing}
-  withVf uri pos vf = maybe (hover parseErr) (withExpr uri pos) (lspSafeParse (virtualFileText vf))
+  -- Comments are not code: hnix discards them, so findExprAt at a comment
+  -- position returns the enclosing CONTAINER and inferring it yields
+  -- TYPE_ERROR — and lib/*.nix is ~40% doc-comment, so hovering most of a
+  -- documented file showed a type error. Return null (no popup) first.
+  withVf uri pos@(Position l c) vf
+    | positionInComment (virtualFileText vf) (fromIntegral l) (fromIntegral c) =
+        responder $ Right $ InR Null
+    | otherwise =
+        maybe (hover parseErr) (withExpr uri pos) (lspSafeParse (virtualFileText vf))
   withExpr uri (Position l c) expr = do
     baseEnv <- liftIO $ buildCrossEnv uri
     enriched <- liftIO $ enrichPkgsOracle uri expr baseEnv
@@ -776,15 +786,24 @@ definitionHandler req responder = do
           fromMaybe
             "no binder found at the cursor (dynamic scope, `with`, or a name narsil does not index)"
             pkgsWhy
-    maybe (nullWith fallbackWhy) (resolveRef uri sg) (findRef (cursorLine, cursorCol) sg)
+    -- An overlay-provided `pkgs.X` DOES get a ref node (findRef succeeds), so
+    -- without this it would fall to the generic "no static binder" message.
+    -- Prefer the pkgs-specific reason on resolution failure too.
+    maybe
+      (nullWith fallbackWhy)
+      (resolveRef uri pkgsWhy sg)
+      (findRef (cursorLine, cursorCol) sg)
   emitNixpkgsLoc uri sp =
     let declUri = maybe uri filePathToUri (CSpan.spanFile sp)
         zeroBased n = fromIntegral (max 0 (n - 1))
         toPos (CSpan.Loc ln col) = Position (zeroBased ln) (zeroBased col)
         loc = Location declUri (Range (toPos (CSpan.spanStart sp)) (toPos (CSpan.spanEnd sp)))
      in responder $ Right $ InL (Definition (InL loc))
-  resolveRef uri sg ref =
-    either (nullWith . resolveWhy) (emitDecl uri) (Scope.resolve sg ref)
+  resolveRef uri override sg ref =
+    either
+      (\e -> nullWith (fromMaybe (resolveWhy e) override))
+      (emitDecl uri)
+      (Scope.resolve sg ref)
   -- the human rendering of a resolution failure — no Show noise
   resolveWhy (Scope.Unresolved r) =
     "`" <> Scope.refName r <> "` has no static binder here (a `with` scope or dynamic attribute?)"
@@ -1126,6 +1145,23 @@ completionHandler req responder = do
             (\e -> memberCompletions env' (Infer.inferExprBindingsPartial env' e) txt li ci)
             mExpr
         scopeItems = maybe [] (\e -> completionsForExpr env' txt e li ci) mExpr
+        -- No parse AND no last-good (an already-broken buffer at open): the
+        -- member/scope/option tiers have no AST, so `lib.`/`builtins.`
+        -- completion would be EMPTY while the raw-text pkgs tier still works.
+        -- Serve those two namespaces straight from the scheme tables, the same
+        -- way the pkgs tier reads raw text. Bounded → isIncomplete stays False.
+        rawSchemeFallback
+          | isJust mExpr = []
+          | otherwise = maybe [] schemeFor rawChain
+         where
+          rawChain = do
+            line <- listToMaybe (drop li (T.lines txt))
+            Just (chainBeforeCursor (T.take ci line))
+          schemeFor (["lib"], prefix) =
+            attrCompletions "lib" (Map.keys libSchemeTable) prefix
+          schemeFor (["builtins"], prefix) =
+            attrCompletions "builtin" (Map.keys builtinSchemeTable) prefix
+          schemeFor _ = []
     -- the OPTIONS universe: `config.…` (alias-aware) completes from the
     -- nixpkgs-wide declaration index
     optItems <- liftIO (optionCompletions uri txt li ci mExpr)
@@ -1140,6 +1176,7 @@ completionHandler req responder = do
           | not (null nixItems) = (nixItems, True)
           | not (null optItems) = (optItems, True)
           | not (null members) = (members, False)
+          | not (null rawSchemeFallback) = (rawSchemeFallback, False)
           | otherwise = (scopeItems, False)
     responder $ Right $ InR $ InL $ CompletionList incomplete Nothing chosen
   -- Package names are pure (index keys); a package's symbols go through the eval
@@ -1275,6 +1312,36 @@ noteGoodParse uri txt =
   record e = do
     modifyIORef' lastGoodParseRef (Map.insert uri e)
     pure (Just e)
+
+{- | Is the 0-based @(line, col)@ inside a Nix comment? A conservative
+single-pass scanner over the text up to the cursor, tracking three states —
+code, @#@ line comment (reset at newline), @/* … */@ block comment. It does
+NOT model @#@/@/*@ appearing inside a string literal (a rare edge, cheaper to
+ignore than to lex); the common case — hovering doc-comment prose in
+@lib/*.nix@ — is what this exists to catch.
+-}
+positionInComment :: Text -> Int -> Int -> Bool
+positionInComment txt line col =
+  finalState /= CommentCode
+ where
+  offset =
+    let before = take line (T.lines txt)
+     in sum (map ((+ 1) . T.length) before) + col
+  finalState = fst (T.foldl' step (CommentCode, ' ') (T.take offset txt))
+  step (CommentCode, _) ch
+    | ch == '#' = (CommentLine, ch)
+  step (CommentCode, prev) ch
+    | prev == '/' && ch == '*' = (CommentBlock, ' ')
+    | otherwise = (CommentCode, ch)
+  step (CommentLine, _) '\n' = (CommentCode, ' ')
+  step (CommentLine, _) ch = (CommentLine, ch)
+  step (CommentBlock, prev) ch
+    | prev == '*' && ch == '/' = (CommentCode, ' ')
+    | otherwise = (CommentBlock, ch)
+
+-- | Lexer state for 'positionInComment'.
+data CommentState = CommentCode | CommentLine | CommentBlock
+  deriving (Eq)
 
 {- | A span's file as a URI — falling back to the REQUEST's uri for spans
 whose file is absent or the parser's buffer placeholder (an expression
