@@ -778,7 +778,8 @@ definitionHandler req responder = do
                       ( "`pkgs."
                           <> key
                           <> "` is not in the nixpkgs index"
-                          <> " (overlay-provided attributes are not indexed yet)"
+                          <> " (may be from a language package set like"
+                          <> " haskellPackages, or an overlay)"
                       )
                   )
                   mIdx

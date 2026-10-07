@@ -47,10 +47,11 @@ import Narsil.Core.Safety qualified as Safety
 import Narsil.Core.Span (Loc (..), Span (..))
 import Narsil.Layout.Edge qualified as Edge
 import Narsil.Syntax.Annotation (varNameText)
-import Nix.Expr.Types (Binding (..), NKeyName (..))
+import Nix.Expr.Types (Binding (..), NKeyName (..), NPos (..), NSourcePos (..))
 import Nix.Expr.Types.Annotated (NExprLoc)
 import System.Directory (canonicalizePath, doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath ((</>))
+import Text.Megaparsec.Pos (unPos)
 
 {- | Where a nixpkgs symbol is defined: a file with a span. For by-name packages
 the span is the head of @package.nix@ (refined to the derivation later).
@@ -127,9 +128,18 @@ allPackagesEntries root = do
     then pure []
     else do
       parsed <- Safety.safeParseNixFile apFile
-      either (const (pure [])) (resolveAll topDir) parsed
+      either (const (pure [])) (build apFile topDir) parsed
  where
-  resolveAll topDir expr = catMaybes <$> mapM (resolveEntry topDir) (callPackageBindings expr)
+  -- Two tiers: a `callPackage <path>` binding resolves to the called FILE
+  -- (where the real source lives); every other top-level binding (aliases,
+  -- re-exports, wrappers like @cabal-install = justStaticExecutables …@)
+  -- resolves to its own DEFINITION SITE in all-packages.nix — not navigable
+  -- to a package dir, but it lands you on the line that tells you where the
+  -- attribute actually comes from. callPackage-target wins over bare defsite.
+  build apFile topDir expr = do
+    cp <- catMaybes <$> mapM (resolveEntry topDir) (callPackageBindings expr)
+    let defs = allDefsites apFile expr
+    pure (Map.toList (Map.union (Map.fromList cp) (Map.fromList defs)))
   resolveEntry topDir (name, relPath) = do
     let raw = topDir </> T.unpack relPath
     isFile <- doesFileExist raw
@@ -155,6 +165,19 @@ callPackageBindings = concatMap binding . Edge.topBindings
  where
   binding (NamedVar (StaticKey k :| []) rhs _) =
     maybe [] (\p -> [(varNameText k, p)]) (Edge.callPackageTargetOf rhs)
+  binding _ = []
+
+{- | Every top-level binding of all-packages.nix mapped to its NAME's source
+span within @apFile@ — the fallback target for attributes (aliases, wrappers,
+re-exports) that aren't @callPackage <path>@ and so have no package dir to jump
+to. Lands the cursor on the defining line.
+-}
+allDefsites :: FilePath -> NExprLoc -> [(Text, Location)]
+allDefsites apFile = concatMap binding . Edge.topBindings
+ where
+  binding (NamedVar (StaticKey k :| []) _ (NSourcePos _ (NPos l) (NPos c))) =
+    let loc = Loc (unPos l) (unPos c)
+     in [(varNameText k, Span loc loc (Just apFile))]
   binding _ = []
 
 -- | Look up a package attribute name in the index.
