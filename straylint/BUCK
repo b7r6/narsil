@@ -1,0 +1,23 @@
+# straylint — see the executable stanza in narsil.cabal. ghc-lib-parser is
+# present in the Nix ghc db but hidden, so the -package flags here are load-
+# bearing at compile time, not just at link time.
+load("//buck:defs.bzl", "OPT", "DYNAMIC_TOO", "GHC2021", "DYNAMIC_LINK", "WARNINGS", "hackage_packages")
+
+# mirrors the straylint build-depends in narsil.cabal
+PACKAGES = hackage_packages([
+    "base",
+    "containers",
+    "directory",
+    "filepath",
+    "ghc-lib-parser",
+    "ghc-lib-parser-ex",
+    "syb",
+])
+
+haskell_binary(
+    name = "straylint",
+    srcs = ["Main.hs"],
+    compiler_flags = OPT + WARNINGS + DYNAMIC_TOO + GHC2021 + PACKAGES,
+    linker_flags = DYNAMIC_LINK + PACKAGES,
+    visibility = ["PUBLIC"],
+)

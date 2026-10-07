@@ -1,0 +1,34 @@
+# Buck2 toolchains for narsil. Deliberately minimal — only what the Haskell
+# build graph reaches. The GHC here is whatever `ghc` resolves to on PATH; run
+# buck2 inside `nix develop`, where that is the flake's ghc-with-packages
+# carrying every Hackage dependency (cabal and buck2 share one toolchain).
+load("@prelude//tests:test_toolchain.bzl", "noop_test_toolchain")
+load("@prelude//toolchains:cxx.bzl", "system_cxx_toolchain")
+load("@prelude//toolchains:genrule.bzl", "system_genrule_toolchain")
+load("@prelude//toolchains:haskell.bzl", "system_haskell_toolchain")
+load("@prelude//toolchains:python.bzl", "system_python_bootstrap_toolchain")
+
+system_cxx_toolchain(
+    name = "cxx",
+    visibility = ["PUBLIC"],
+)
+
+system_genrule_toolchain(
+    name = "genrule",
+    visibility = ["PUBLIC"],
+)
+
+system_haskell_toolchain(
+    name = "haskell",
+    visibility = ["PUBLIC"],
+)
+
+system_python_bootstrap_toolchain(
+    name = "python_bootstrap",
+    visibility = ["PUBLIC"],
+)
+
+noop_test_toolchain(
+    name = "test",
+    visibility = ["PUBLIC"],
+)

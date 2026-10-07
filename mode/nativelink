@@ -1,0 +1,5 @@
+--config=buck2_re_client.engine_address=grpc://127.0.0.1:50051
+--config=buck2_re_client.action_cache_address=grpc://127.0.0.1:50051
+--config=buck2_re_client.cas_address=grpc://127.0.0.1:50051
+--config=buck2_re_client.tls=false
+--config=build.remote_execution_enabled=true

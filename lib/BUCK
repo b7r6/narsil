@@ -1,0 +1,39 @@
+# The narsil library. Hackage deps come from the Nix ghcWithPackages global
+# db (see toolchains//BUCK); only first-party deps appear as buck targets.
+load("//buck:defs.bzl", "OPT", "DYNAMIC_TOO", "GHC2021", "WARNINGS", "hackage_packages")
+
+# mirrors the library build-depends in narsil.cabal
+PACKAGES = hackage_packages([
+    "aeson",
+    "async",
+    "base",
+    "bytestring",
+    "containers",
+    "cryptohash-sha256",
+    "data-fix",
+    "dhall",
+    "directory",
+    "filepath",
+    "hnix",
+    "katip",
+    "lsp",
+    "lsp-types",
+    "megaparsec",
+    "mtl",
+    "prettyprinter",
+    "prettyprinter-ansi-terminal",
+    "process",
+    "ShellCheck",
+    "stm",
+    "text",
+    "transformers",
+])
+
+haskell_library(
+    name = "narsil",
+    srcs = glob(["Narsil.hs", "Narsil/**/*.hs"]),
+    compiler_flags = OPT + WARNINGS + DYNAMIC_TOO + GHC2021 + PACKAGES,
+    linker_flags = PACKAGES,
+    deps = ["//vendor/nixfmt:nixfmt-vendored"],
+    visibility = ["PUBLIC"],
+)

@@ -1,0 +1,30 @@
+load("//buck:defs.bzl", "OPT", "DYNAMIC_TOO", "GHC2021", "DYNAMIC_LINK", "WARNINGS", "hackage_packages")
+
+# mirrors the narsil executable build-depends in narsil.cabal
+PACKAGES = hackage_packages([
+    "aeson",
+    "async",
+    "base",
+    "bytestring",
+    "containers",
+    "data-fix",
+    "dhall",
+    "directory",
+    "filepath",
+    "hnix",
+    "katip",
+    "megaparsec",
+    "mtl",
+    "ShellCheck",
+    "text",
+    "transformers",
+])
+
+haskell_binary(
+    name = "narsil",
+    srcs = ["Main.hs"],
+    compiler_flags = OPT + WARNINGS + DYNAMIC_TOO + GHC2021 + PACKAGES,
+    linker_flags = DYNAMIC_LINK + PACKAGES,
+    deps = ["//lib:narsil"],
+    visibility = ["PUBLIC"],
+)

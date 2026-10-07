@@ -1,0 +1,24 @@
+# Deep-vendored nixfmt (see the nixfmt-vendored stanza in narsil.cabal for
+# provenance and the MPL licensing note).
+load("//buck:defs.bzl", "OPT", "DYNAMIC_TOO", "HASKELL2010", "WARNINGS", "hackage_packages")
+
+# mirrors the nixfmt-vendored build-depends in narsil.cabal
+PACKAGES = hackage_packages([
+    "base",
+    "containers",
+    "megaparsec",
+    "mtl",
+    "parser-combinators",
+    "scientific",
+    "text",
+    "transformers",
+    "pretty-simple",
+])
+
+haskell_library(
+    name = "nixfmt-vendored",
+    srcs = glob(["Nixfmt.hs", "Nixfmt/**/*.hs"]),
+    compiler_flags = OPT + WARNINGS + DYNAMIC_TOO + HASKELL2010 + ["-Wno-orphans"] + PACKAGES,
+    linker_flags = PACKAGES,
+    visibility = ["PUBLIC"],
+)
