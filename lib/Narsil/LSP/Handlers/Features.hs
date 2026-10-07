@@ -120,9 +120,18 @@ spanContains (cl, cc) sp =
       ec = Scope.posCol e
    in cl >= sl && cl <= el && (cl /= sl || cc >= sc) && (cl /= el || cc <= ec)
 
--- | Pure: convert a 1-based scope-graph 'Scope.SourcePos' to a 0-based LSP 'Position'.
+{- | Pure: convert a 1-based scope-graph 'Scope.SourcePos' to a 0-based LSP
+'Position'. The @max 0@ clamps are load-bearing: a synthetic declaration
+(self\/inputs, built with @emptySpan@ = line 0) would otherwise compute
+@0 - 1 = -1@, and @fromIntegral (-1) :: UInt@ saturates to lsp-types'
+@maxBound@ (2147483647) — so @self.overlays.default@ "jumped" to line
+2147483647. Every nav/rename/reference emit flows through here.
+-}
 toLspPos :: Scope.SourcePos -> Position
-toLspPos sp = Position (fromIntegral (Scope.posLine sp - 1)) (fromIntegral (Scope.posCol sp - 1))
+toLspPos sp =
+  Position
+    (fromIntegral (max 0 (Scope.posLine sp - 1)))
+    (fromIntegral (max 0 (Scope.posCol sp - 1)))
 
 -- ═══════════════════════ completion ═══════════════════════
 
